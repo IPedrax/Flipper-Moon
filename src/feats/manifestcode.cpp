@@ -30,6 +30,7 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -128,6 +129,10 @@ constexpr uint32_t kHashGetManifestRequestCode =
 
 constexpr uint32_t kHashPlayerGetUserStats =
     fnvHash("Player.GetUserStats#1");
+constexpr uint32_t kHashPlayerGetUserAchievements =
+    fnvHash("Player.GetUserAchievements#1");
+constexpr uint32_t kHashPlayerGetGameAchievements =
+    fnvHash("Player.GetGameAchievements#1");
 
 
 
@@ -296,6 +301,7 @@ void dispatchSend(uint32_t eMsg,
 {
 	if (eMsg == EMSG_REQUEST_USERSTATS)
 	{
+		g_pLog->debugOnce("Achievements: legacy ClientGetUserStats (818) request seen\n");
 		if (cbHdr > kMaxHdrSize) return;
 		CMsgProtoBufHeader hdr;
 		if (!hdr.ParseFromArray(pHdr, cbHdr)) return;
@@ -322,6 +328,14 @@ void dispatchSend(uint32_t eMsg,
 		return;
 	case kHashPlayerGetUserStats:
 		handleSend_PlayerGetUserStats(pBody, cbBody, pHdr, cbHdr, eMsg);
+		return;
+	case kHashPlayerGetUserAchievements:
+		if (cbHdr <= kMaxHdrSize)
+			Achievements::noteUserAchievementsRequest(pBody, cbBody, hdr);
+		return;
+	case kHashPlayerGetGameAchievements:
+		if (cbHdr <= kMaxHdrSize)
+			Achievements::noteGameAchievementsRequest(pBody, cbBody, hdr);
 		return;
 	default:
 		return;
@@ -417,6 +431,18 @@ void dispatchRecv(uint32_t eMsg,
 		return;
 	}
 	g_pLog->debug("WebSocket service method recv: %s\n", hdr.target_job_name().c_str());
+	if (fnvHash(hdr.target_job_name().c_str()) == kHashPlayerGetGameAchievements)
+		Achievements::noteGameAchievementsResponse(pBody, cbBody, hdr);
+	if (fnvHash(hdr.target_job_name().c_str()) == kHashPlayerGetUserAchievements)
+	{
+		const auto filled = Achievements::rewriteUserAchievementsResponse(pBody, cbBody, hdr);
+		if (filled && filled->size() <= sizeof(g_RxBody))
+		{
+			std::memcpy(g_RxBody, filled->data(), filled->size());
+			g_RxBodyLen = static_cast<uint32_t>(filled->size());
+			g_PatchRx = true;
+		}
+	}
 }
 
 } // namespace
@@ -712,6 +738,8 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 	};
 
 	const uint32_t eMsg = peek32(pJob, 0x10);
+	if (eMsg == EMSG_REQUEST_USERSTATS_RESPONSE)
+		g_pLog->debugOnce("Achievements: legacy ClientGetUserStats response (819) routed to a job\n");
 	if (eMsg != 0x93 /* k_EMsgServiceMethodResponse */)
 	{
 		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
@@ -755,6 +783,55 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 	if (hdr.ParseFromArray(pBuf + sizeof(MsgHdr), cbProtoHdr) && hdr.has_target_job_name())
 	{
 		g_pLog->debug("BRouteMsgToJob service method response: %s\n", hdr.target_job_name().c_str());
+		{
+			const std::string& jobName = hdr.target_job_name();
+			if (jobName == "Player.GetGameAchievements#1" ||
+			    jobName == "Player.GetUserAchievements#1" ||
+			    jobName == "Player.GetUserStats#1")
+			{
+				const uint32_t bodyLen = cbBuf > sizeof(MsgHdr) + cbProtoHdr ? cbBuf - static_cast<uint32_t>(sizeof(MsgHdr)) - cbProtoHdr : 0u;
+				g_pLog->debug("Achievements: %s body=%u bytes eresult=%d\n", jobName.c_str(),
+				              bodyLen, hdr.has_eresult() ? hdr.eresult() : -1);
+				if (jobName == "Player.GetGameAchievements#1" || jobName == "Player.GetUserAchievements#1")
+				{
+					const uint8_t* body = pBuf + sizeof(MsgHdr) + cbProtoHdr;
+					std::map<uint32_t, uint32_t> counts;
+					PlayerStats::detail::walk(body, bodyLen, [&](const auto& field) { ++counts[field.number]; });
+					std::string summary;
+					for (const auto& [number, count] : counts)
+						summary += std::to_string(number) + "x" + std::to_string(count) + " ";
+					g_pLog->debug("Achievements: %s top-level fields %s\n", jobName.c_str(), summary.c_str());
+				}
+			}
+		}
+#if defined(__x86_64__)
+		// On the 64-bit client the service-method responses reach their job through this
+		// routing function; CRemoteClientManager::RecvPkt never sees them, so the answer to a
+		// redirected Player.GetUserStats#1 is rewritten here (same CRemoteClientPacket that
+		// hkRecvPkt patches on i386): the owner's progress must never reach the UI.
+		if (fnvHash(hdr.target_job_name().c_str()) == kHashPlayerGetUserStats ||
+		    fnvHash(hdr.target_job_name().c_str()) == kHashPlayerGetUserAchievements ||
+		    fnvHash(hdr.target_job_name().c_str()) == kHashPlayerGetGameAchievements)
+		{
+			std::lock_guard<std::mutex> lock(g_RxLock);
+			g_PatchRx    = false;
+			g_PatchRxHdr = false;
+			dispatchRecv(0x93, pBuf + sizeof(MsgHdr) + cbProtoHdr,
+			             cbBuf - static_cast<uint32_t>(sizeof(MsgHdr)) - cbProtoHdr,
+			             pBuf + sizeof(MsgHdr), cbProtoHdr);
+			if (g_PatchRxHdr || g_PatchRx)
+			{
+				patchRecvFrame(const_cast<CRemoteClientPacket*>(pInner),
+				               g_PatchRxHdr ? g_RxHdr : pBuf + sizeof(MsgHdr),
+				               g_PatchRxHdr ? g_RxHdrLen : cbProtoHdr,
+				               g_PatchRx ? g_RxBody : pBuf + sizeof(MsgHdr) + cbProtoHdr,
+				               g_PatchRx ? g_RxBodyLen
+				                         : cbBuf - static_cast<uint32_t>(sizeof(MsgHdr)) - cbProtoHdr);
+				g_pLog->debugOnce("Achievements: GetUserStats response rewritten in the job router\n");
+			}
+			return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
+		}
+#endif
 		if (fnvHash(hdr.target_job_name().c_str()) != kHashGetManifestRequestCode)
 		{
 			return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
