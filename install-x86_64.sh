@@ -13,7 +13,9 @@
 #                     not attempt a cloud sync nobody answers.
 #
 #  With the legacy 32-bit client (sentinel .steam-disable-steamrt64-client, or
-#  STEAM_FORCE_CLIENT=ubuntu12_32|scout|ldlp) everything is delegated unchanged.
+#  STEAM_FORCE_CLIENT=ubuntu12_32|scout|ldlp), or when no 64-bit client is found, the
+#  installer stops before changing anything and says why; SLSM_ALLOW_STOCK=1 delegates
+#  to the stock installer instead (upstream 32-bit build).
 #
 #  Lumen and the LuaTools menu ship with swwayps/* repositories hard-coded for the
 #  update check, the "Update All" button and the auto-fix offer. After Lumen is
@@ -83,6 +85,21 @@ slsm_client_is_64bit() {
 		return 1
 	fi
 	[ -x "$root/steamrt64/steam" ] && [ -f "$root/steamrt64/steamclient.so" ]
+}
+
+# Why slsm_client_is_64bit said no, in one line (printed when the install stops).
+slsm_32bit_reason() {
+	local root
+	case "${STEAM_FORCE_CLIENT:-}" in
+		ubuntu12_32|scout|ldlp)
+			echo "the environment variable STEAM_FORCE_CLIENT=${STEAM_FORCE_CLIENT} forces the 32-bit client"; return ;;
+	esac
+	root="$(slsm_steam_root)" || {
+		echo "no Steam installation (steam.sh) was found in ~/.steam/steam, ~/.steam/debian-installation or ~/.local/share/Steam"; return; }
+	if [ "${STEAM_FORCE_CLIENT:-}" != steamrt64 ] && [ -e "$root/.steam-disable-steamrt64-client" ]; then
+		echo "the file $root/.steam-disable-steamrt64-client forces the 32-bit client"; return
+	fi
+	echo "$root/steamrt64/ is missing or incomplete: Steam has not downloaded its 64-bit client yet"
 }
 
 # ---------------------------------------------------------------------------
@@ -259,8 +276,16 @@ main_x86_64() {
 		log_info "$(L "64-bit Steam client detected: using the x86_64 slsteam-moon build." \
 		             "Cliente Steam de 64 bits detectado: usando o build x86_64 do slsteam-moon.")"
 	else
-		log_info "$(L "32-bit Steam client in use (or Steam not initialised yet): stock behaviour." \
-		             "Cliente Steam de 32 bits em uso (ou Steam ainda não inicializada): comportamento padrão.")"
+		local reason; reason="$(slsm_32bit_reason)"
+		if [ "${SLSM_ALLOW_STOCK:-0}" != 1 ]; then
+			log_warn "$(L "Stopping: this installer is for the 64-bit Steam client, and ${reason}." \
+			             "Parando: este instalador é para o cliente Steam de 64 bits, e ${reason}.")"
+			log_info "$(L "Nothing was changed. Remove that setting (or start Steam once so it downloads the 64-bit client), then run this installer again. For the 32-bit client use https://github.com/swwayps/luatools-moon instead. To install the upstream 32-bit build anyway: SLSM_ALLOW_STOCK=1." \
+			             "Nada foi alterado. Remova essa configuração (ou abra a Steam uma vez para baixar o cliente de 64 bits) e rode este instalador de novo. Para o cliente de 32 bits use https://github.com/swwayps/luatools-moon. Para instalar mesmo assim o build de 32 bits do upstream: SLSM_ALLOW_STOCK=1.")"
+			exit 1
+		fi
+		log_warn "$(L "SLSM_ALLOW_STOCK=1: installing the upstream 32-bit build because ${reason}." \
+		             "SLSM_ALLOW_STOCK=1: instalando o build de 32 bits do upstream porque ${reason}.")"
 	fi
 	main "${PASSTHRU[@]+"${PASSTHRU[@]}"}"
 	[ "${SLSM_REPOINT_FAILED:-0}" = 0 ] || exit 1

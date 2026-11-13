@@ -58,6 +58,20 @@ come from their upstream repositories). CloudRedirect is skipped because its hoo
 
 **3. Start Steam** from your applications menu. The first launch can take a while.
 
+### If the installer stops with "forces the 32-bit client"
+
+The installer refuses to continue (nothing is changed) when it finds that your Steam is set
+to the legacy 32-bit client, or that no 64-bit client is installed, and it tells you which:
+
+- a file `.steam-disable-steamrt64-client` in your Steam folder: delete it;
+- an environment variable `STEAM_FORCE_CLIENT=ubuntu12_32` (or `scout`, `ldlp`) in your shell
+  configuration, `.desktop` files or `/etc/environment`: remove it and open a new terminal;
+- no `steamrt64/` folder: start Steam once and let it update, then run the installer again.
+
+Both settings are often left over from trying to downgrade Steam. If you really want the
+upstream 32-bit build, use the upstream repository, or run the installer with
+`SLSM_ALLOW_STOCK=1` to let it install that build.
+
 ## Supported platforms
 
 - **Tested:** a Debian 13 desktop (x86_64, X11 session) with the 64-bit Steam client, from

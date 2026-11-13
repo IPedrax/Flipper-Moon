@@ -44,16 +44,31 @@ out="$(env -u STEAM_FORCE_CLIENT HOME="$T/home" LUATOOLS_INSTALL_FILE="$T/stock.
 echo "$out" | grep -q 'STOCK install_cloudredirect' && ko "64-bit: CloudRedirect not skipped" || ok "64-bit: CloudRedirect skipped"
 echo "$out" | grep -q 'set_disable_cloud yes' && ok "64-bit: DisableCloud forced to yes" || ko "64-bit: DisableCloud not forced"
 
-mkroot 1 1; out="$(run)"
+mkroot 1 1; out="$(run SLSM_ALLOW_STOCK=1)"
 echo "$out" | grep -q 'STOCK install_slsteam_moon' && echo "$out" | grep -q 'STOCK install_cloudredirect' \
-	&& ok "sentinel (32-bit client): stock behaviour" || ko "sentinel: stock behaviour lost"
+	&& ok "sentinel + SLSM_ALLOW_STOCK=1: stock behaviour" || ko "sentinel: stock behaviour lost"
+echo "$out" | grep -q 'SLSM_ALLOW_STOCK=1: installing the upstream 32-bit build' && ok "the stock fallback says why" || ko "stock fallback is silent"
 echo "$out" | grep -q 'args: --noplugin' && ok "stock options are passed through" || ko "options lost"
 
 mkroot 1 1; out="$(env HOME="$T/home" STEAM_FORCE_CLIENT=steamrt64 LUATOOLS_INSTALL_FILE="$T/stock.sh" bash install-x86_64.sh 2>&1)"
 echo "$out" | grep -q 'STOCK install_slsteam_moon' && ko "STEAM_FORCE_CLIENT=steamrt64 ignored" || ok "STEAM_FORCE_CLIENT=steamrt64 beats the sentinel"
 
-mkroot 0 0; out="$(run)"
-echo "$out" | grep -q 'STOCK install_slsteam_moon' && ok "no steamrt64 directory: stock behaviour" || ko "no steamrt64: not stock"
+mkroot 0 0; out="$(run SLSM_ALLOW_STOCK=1)"
+echo "$out" | grep -q 'STOCK install_slsteam_moon' && ok "no steamrt64 directory + SLSM_ALLOW_STOCK=1: stock behaviour" || ko "no steamrt64: not stock"
+
+# The guard: a 32-bit verdict stops before anything is installed, and says why.
+guard() { # $1 = label  $2 = expected text  [env assignments for run]
+	local label="$1" want="$2"; shift 2
+	out="$(run "$@"; echo "rc=$?")"
+	echo "$out" | grep -q 'rc=1' && ! echo "$out" | grep -q 'STOCK install_' && echo "$out" | grep -qF "$want" \
+		&& echo "$out" | grep -q 'Nothing was changed' && ok "guard stops: $label" || ko "guard: $label: $out"
+}
+mkroot 1 1; guard "sentinel file" '.steam-disable-steamrt64-client forces the 32-bit client'
+mkroot 1 0; guard "STEAM_FORCE_CLIENT=ubuntu12_32" 'STEAM_FORCE_CLIENT=ubuntu12_32 forces the 32-bit client' STEAM_FORCE_CLIENT=ubuntu12_32
+mkroot 0 0; guard "no 64-bit client downloaded" 'missing or incomplete: Steam has not downloaded its 64-bit client yet'
+mkroot 1 0; rm "$T/home/Steam/steam.sh"; guard "no Steam installation" 'no Steam installation (steam.sh) was found'
+mkroot 1 1; out="$(run STEAM_FORCE_CLIENT=steamrt64; echo "rc=$?")"
+echo "$out" | grep -q 'STOCK install_slsteam_moon' && ko "guard fired although STEAM_FORCE_CLIENT=steamrt64" || ok "STEAM_FORCE_CLIENT=steamrt64 passes the guard despite the sentinel"
 
 mkroot 1 0; out="$(env -u STEAM_FORCE_CLIENT HOME="$T/home" LUATOOLS_INSTALL_FILE="$T/stock.sh" LUATOOLS_INSTALL_SHA256=deadbeef bash install-x86_64.sh 2>&1)"
 echo "$out" | grep -q 'does not match' && ok "pinned sha256 mismatch refuses the stock installer" || ko "sha256 pin ignored"
