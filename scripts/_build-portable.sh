@@ -33,19 +33,33 @@ if [ -z "$runtime" ]; then
 	exit 1
 fi
 
-echo "==> portable build (using $runtime, image slsteam-moon-builder)"
+# Target class: ARCH (default: the host's) selects the 64-bit builder image or the
+# 32-bit one, like the Makefile does.
+ARCH="${ARCH:-$(uname -m)}"
+if [ "$ARCH" = "x86_64" ]; then
+	DOCKERFILE="scripts/Dockerfile.x86_64"; IMAGE="slsteam-moon-builder-x86_64"
+else
+	DOCKERFILE="scripts/Dockerfile"; IMAGE="slsteam-moon-builder"
+fi
+
+echo "==> portable build (using $runtime, image $IMAGE, ARCH=$ARCH)"
 
 # Build (or reuse) the builder image. Tagging by name only, the layer cache
 # inside the runtime keeps rebuilds cheap.
-"$runtime" build -f scripts/Dockerfile -t slsteam-moon-builder . >&2
+"$runtime" build -f "$DOCKERFILE" -t "$IMAGE" . >&2
 
 # Run the build inside the container with the repo bind-mounted, so the
 # resulting bin/ lands on the host without needing a docker cp.
-"$runtime" run --rm \
+# Docker runs as root: without --user the bind-mounted obj/ and bin/ would come back
+# root-owned and the next host `make clean` would fail.  Rootless podman needs nothing.
+user_args=()
+[ "$runtime" = docker ] && user_args=(--user "$(id -u):$(id -g)")
+
+"$runtime" run --rm "${user_args[@]}" \
 	-v "$PWD:/build:Z" \
 	-w /build \
-	slsteam-moon-builder \
-	bash -c 'make clean && make'
+	"$IMAGE" \
+	bash -c "make clean && make ARCH=$ARCH"
 
 scripts/check-pattern-refresh-abi.sh bin/pattern-refresh
 

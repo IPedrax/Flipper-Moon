@@ -939,7 +939,14 @@ if [ -x "$LUMEN_DIR/lumen" ] && ! pgrep -f "$LUMEN_DIR/lumen" >/dev/null 2>&1; t
 	    setsid "$LUMEN_DIR/lumen" >/dev/null 2>&1 < /dev/null &
 fi
 
-AUDIT="$SLSDIR/library-inject.so:$SLSDIR/SLSsteam.so"
+AUDIT="$SLSDIR/SLSsteam.so"
+# library-inject.so sends the 32-bit client's libcurl to a system copy and only
+# searches 32-bit directories: for the 64-bit build it could resolve a library of
+# the wrong class (Fedora's /usr/lib is i686), so it is skipped for ELF64 builds.
+if [ -f "$SLSDIR/library-inject.so" ] && \
+   [ "$(od -An -tx1 -j4 -N1 "$SLSDIR/SLSsteam.so" 2>/dev/null | tr -d ' \n')" != 02 ]; then
+	AUDIT="$SLSDIR/library-inject.so:$AUDIT"
+fi
 
 # Re-assert desktop-entry coverage without putting reconciliation on the launch
 # critical path. Prefer the serialized guardian; retain the legacy CLI fallback
