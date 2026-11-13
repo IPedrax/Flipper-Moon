@@ -13,8 +13,8 @@ and the full status table: [`docs/X86_64.md`](docs/X86_64.md).
 
 ## Install
 
-Requirements: Linux with the 64-bit Steam client (the default), `curl`, a terminal and
-`sudo`. The installer stops Steam and asks for your password once.
+Requirements: a desktop Linux with the 64-bit Steam client (the default), `curl`, a terminal and
+`sudo` (see [Supported platforms](#supported-platforms): SteamOS is not supported). The installer stops Steam and asks for your password once.
 
 **1. If you already have the upstream (32-bit) slsteam-moon / luatools-moon, remove it first.**
 Run the upstream uninstaller, which cleans the old library, wrapper, launcher patches,
@@ -42,6 +42,20 @@ come from their upstream repositories). CloudRedirect is skipped because its hoo
 32-bit library: Steam Cloud is disabled for added games (`DisableCloud: yes`).
 
 **3. Start Steam** from your applications menu. The first launch can take a while.
+
+## Supported platforms
+
+- **Tested:** a Debian 13 desktop (x86_64, X11 session) with the 64-bit Steam client, from
+  uninstall to install to a running Steam. The build was also compiled on Arch Linux in a
+  container; it was not run under Steam there.
+- **Not supported, never tested: SteamOS, Steam Deck and its Gaming Mode, Decky Loader,
+  Bazzite and other immutable distributions.** The upstream installer that this one wraps can
+  change how Steam is launched in Gaming Mode (its "Game Mode hook"); that part was not
+  adapted or tried here. A user reported that the install broke Decky's frontend in Gaming
+  Mode ([issue #1](https://github.com/ogb4n/slsteam-moon-x64/issues/1)). Do not install on
+  such a system unless you accept that risk.
+- If it already happened, the upstream `uninstall.sh` from step 1 is meant to remove the
+  Game Mode launcher hook; this was not verified on SteamOS.
 
 ## Update and uninstall
 
