@@ -183,5 +183,41 @@ namespace ReconcilePin
 			}
 			return found;
 		}
+
+		// x86_64: the same loop reads the base as `mov r11,[rbx+disp32]` (4C 8B 9B d32) right
+		// before `mov r14,r15; shl r14,5` (4D 89 FE 49 C1 E6 05).  The vector size sits at
+		// base+0x10 (capacity +8); `movsxd rdx,[rbx+disp+0x10]` (48 63 93 d32) is required
+		// to occur as well, so a different field with the same shape is not accepted.
+		inline long findCtxDepotVectorOffset64(
+			const std::uint8_t* code, std::size_t len)
+		{
+			static constexpr std::uint8_t kHead[] = {0x4C, 0x8B, 0x9B};
+			static constexpr std::uint8_t kTail[] = {
+				0x4D, 0x89, 0xFE, 0x49, 0xC1, 0xE6, 0x05};
+			long found = -1;
+			for (std::size_t off = 0; off + 7 + sizeof(kTail) <= len; ++off)
+			{
+				if (std::memcmp(code + off, kHead, sizeof(kHead)) != 0) continue;
+				if (std::memcmp(code + off + 7, kTail, sizeof(kTail)) != 0) continue;
+				std::uint32_t disp = 0;
+				std::memcpy(&disp, code + off + 3, sizeof(disp));
+				if (found != -1) return -1;  // ambiguous
+				if (disp == 0 || disp % 8 != 0 || disp > kMaxCtxDepotVectorOff)
+					return -1;
+				found = static_cast<long>(disp);
+			}
+			if (found < 0) return -1;
+			// movsxd rdx,DWORD PTR [rbx+disp+0x10]
+			const std::uint32_t sizeDisp = static_cast<std::uint32_t>(found) + 0x10;
+			for (std::size_t off = 0; off + 7 <= len; ++off)
+			{
+				if (code[off] != 0x48 || code[off + 1] != 0x63 || code[off + 2] != 0x93)
+					continue;
+				std::uint32_t disp = 0;
+				std::memcpy(&disp, code + off + 3, sizeof(disp));
+				if (disp == sizeDisp) return found;
+			}
+			return -1;
+		}
 	}
 }

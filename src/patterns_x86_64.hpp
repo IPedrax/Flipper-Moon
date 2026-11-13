@@ -184,15 +184,28 @@ namespace PatternsX64
 			  "", "", -1, {}, {}, false, {},
 			  { "CDepotDownloadMgr::BYldRequestDepotManifest(App: %d, Depot: %d, Manifest: %llu, branch: %s): Failed to get manifest request code, '%s'",
 			    "CDepotDownloadMgr::BYldRequestDepotManifest: same manifest %llu requested twice" } },
-			// ---- Located (audited offline), hooks not ported to 64-bit yet: bindAtRuntime=false.
+			// ---- Located (audited offline); the ones below with bindAtRuntime=false have no 64-bit hook yet.
 			// Each was matched to its i386 twin by shared strings AND by direct-caller
 			// counts (tools/re/rosette.py, callers.py).
+			// OnChunkUnpacked(context, chunk, source, location, detail, unpackResult), six register
+			// arguments.  Two copies exist, as on i386 (twins 0x1521750 and its regparm sibling):
+			// 0x13de1e0 (0 direct callers, 0x31a bytes) and 0x13de530 (1 caller, 0x900 bytes,
+			// the same prologue and error paths with more inlined).  Strings alone cannot tell
+			// them apart because the big one carries every string of the small one: the small one
+			// is matched by its prologue (a fewest-called string tie-break resolved offline but
+			// not in the live process), the big one by a string only it has.
+			{ "CDepotDownloadMgr::OnChunkUnpacked[cdecl]",
+			  "55 48 89 E5 41 57 41 56 49 89 D6 41 55 41 89 CD 41 54 4D 89 C4 53 48 89 FB 48 81 EC ? ? 00 00",
+			  Follow::None, {} },
+			{ "CDepotDownloadMgr::OnChunkUnpacked[regparm3]", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "OnChunkUnpacked", "posting write chunk, offset %llu" }, false, false, true },
 			// "config changed : added/updated/removed depots": one function.  i386 twin 0x11d14e0.
 			{ "CDepotDownloadMgr::EvaluateConfigChanges", "", Follow::StringXref, {},
 			  "", "", -1, {}, {}, false, {},
 			  { "AppID %u %sconfig changed : added depots %s",
 			    "AppID %u %sconfig changed : updated depots %s",
-			    "AppID %u %sconfig changed : removed depots %s" }, false, false, false },
+			    "AppID %u %sconfig changed : removed depots %s" }, false, false, true },
 			// Bound at runtime (hook ported: ManifestBind).  Arguments checked in the
 			// disassembly: rdi ctx, rsi, edx appId, ecx depotId, r8 manifestId (the
 			// "%s/depotcache/%d_%llu.manifest" asprintf takes ecx and r8), r9.

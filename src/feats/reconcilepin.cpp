@@ -14,6 +14,10 @@
 #include "manifeststore.hpp"
 
 #include "libmem/libmem.h"
+#if defined(__x86_64__)
+#include "../detour_x64.hpp"
+#include <string>
+#endif
 
 #include <atomic>
 #include <climits>
@@ -31,8 +35,15 @@ namespace
 	// pointer regparm(1) keeps EAX intact across the call so the relocated
 	// prologue's `mov %eax,-0xb0(%ebp)` reads the right anchor.  (Prologue is a
 	// plain `push ebp`, not a get_pc_thunk -> no fixPICThunkCall.)
+#if defined(__x86_64__)
+	// x86_64: ctx arrives in rdi like any other first argument; the six register
+	// arguments are forwarded untouched (EvaluateConfigChanges takes no stack ones).
+	typedef std::uint64_t (*ReconFn_t)(
+	    void* ctx, void* a1, void* a2, void* a3, void* a4, void* a5);
+#else
 	typedef void* (__attribute__((regparm(1))) *ReconFn_t)(
 	    void* mgr, void* ctx, void* a1, void* a2);
+#endif
 
 	ReconFn_t    g_orig = nullptr;
 	lm_address_t g_addr = LM_ADDRESS_BAD;
@@ -44,14 +55,25 @@ namespace
 	std::atomic<int> g_traceBudget{400};
 
 	// ctx layout (confirmed live on build cfe99f0c).
+#if defined(__x86_64__)
+	// x86_64: the context starts with a vtable pointer, so flags/appid sit 4 bytes
+	// later (read from EvaluateConfigChanges: `mov edx,[rdi+8]` flags, `mov esi,[rbx+0xc]` appid).
+	constexpr size_t kCtxFlagsOff = 0x08;
+	constexpr size_t kCtxAppIdOff = 0x0c;
+#else
 	constexpr size_t kCtxFlagsOff = 0x04;
 	constexpr size_t kCtxAppIdOff = 0x08;
+#endif
 	// The depot CUtlVector inside ctx moves when Steam grows the context
 	// (0x78 -> 0x90 on the 2026-10 client), so it is decoded from
 	// EvaluateConfigChanges at setup.  0 = not located: the ctx-vector patch
 	// stays off instead of rewriting whatever field now sits at a stale offset.
 	size_t g_ctxDepotVecOff = 0;
+#if defined(__x86_64__)
+	constexpr size_t kCtxVecCountOff = 0x10;  // CUtlVector size (base +0, capacity +8)
+#else
 	constexpr size_t kCtxVecCountOff = 0x0c;  // CUtlVector size, after base
+#endif
 	// flag bit marking the TARGET/appinfo ctx (vs the ACTIVE/installed ctx).
 	constexpr uint32_t kFlagTargetSide = 0x8;
 	// DepotEntry: DepotId @ +0, ManifestGid @ +0x8, Size @ +0x10,
@@ -192,7 +214,11 @@ namespace
 	//
 	// CUtlVector<DepotEntry>: element base @ +0x0, count @ +0xc.
 	constexpr size_t kVecBaseOff = 0x00;
+#if defined(__x86_64__)
+	constexpr size_t kVecCountOff = 0x10;
+#else
 	constexpr size_t kVecCountOff = 0x0c;
+#endif
 
 	// Whether an address lands in an executable segment. Used to validate a
 	// scanned near-call target so drift recovery can never pick a byte whose
@@ -206,8 +232,16 @@ namespace
 			address >= segment.base && address < segment.end;
 	}
 
+#if defined(__x86_64__)
+	using BuildTargetFn_t = std::uint64_t (*)(void*, uint32_t, void*, void*, void*,
+	                                          void*, void*, void*);
+	// Return address of EvaluateConfigChanges' own call to the builder: the builder has six
+	// callers and only this one fills the reconciler's local TARGET vector.
+	std::uintptr_t g_buildCallRet = 0;
+#else
 	using BuildTargetFn_t = void* (*)(void*, uint32_t, void*, void*, void*,
 	                                  void*, void*, void*);
+#endif
 	BuildTargetFn_t g_origBuild = nullptr;
 	lm_address_t    g_buildAddr = LM_ADDRESS_BAD;
 	lm_size_t       g_buildSize = 0;
@@ -240,6 +274,17 @@ namespace
 		}
 	}
 
+#if defined(__x86_64__)
+	__attribute__((noinline))
+	std::uint64_t hkBuildTarget(void* a0, uint32_t appId, void* a2, void* targetVec,
+	                            void* a4, void* ctx, void* a6, void* a7)
+	{
+		const auto ret = reinterpret_cast<std::uintptr_t>(__builtin_return_address(0));
+		const std::uint64_t r = g_origBuild(a0, appId, a2, targetVec, a4, ctx, a6, a7);
+		if (targetVec && ret == g_buildCallRet) patchTargetVec(targetVec, appId);
+		return r;
+	}
+#else
 	__attribute__((noinline))
 	void* hkBuildTarget(void* a0, uint32_t appId, void* a2, void* targetVec,
 	                    void* a4, void* ctx, void* a6, void* a7)
@@ -248,7 +293,77 @@ namespace
 		if (targetVec) patchTargetVec(targetVec, appId);
 		return r;
 	}
+#endif
 
+#if defined(__x86_64__)
+	// x86_64 builder hook.  EvaluateConfigChanges calls the builder as
+	//   push &flag2; push &flag1; mov rdi,[..]; call builder; test al,al; pop rdx; pop rcx
+	// (eight arguments: six in registers, two on the stack), with rcx = the local TARGET
+	// vector and r9 = ctx.  The call is located by that unique shape, its target is the
+	// builder, and the hook acts only when called from that exact site.
+	bool installBuildTargetHook(lm_address_t evalAddr)
+	{
+		lm_segment_t segment{};
+		if (!LM_FindSegment(evalAddr, &segment) || segment.end <= evalAddr) return false;
+		const size_t readable = static_cast<size_t>(segment.end - evalAddr);
+		const size_t scanLen = readable < 0x1000 ? readable : 0x1000;
+		const auto* fn = reinterpret_cast<const uint8_t*>(evalAddr);
+
+		// 50 48 8D 85 d32  50 48 8B BD d32  E8 rel32  84 C0 5A 59
+		long site = -1;
+		for (size_t off = 0; off + 29 <= scanLen; ++off)
+		{
+			if (fn[off] != 0x50 || fn[off + 1] != 0x48 || fn[off + 2] != 0x8D ||
+			    fn[off + 3] != 0x85 || fn[off + 8] != 0x50 || fn[off + 9] != 0x48 ||
+			    fn[off + 10] != 0x8B || fn[off + 11] != 0xBD || fn[off + 16] != 0xE8 ||
+			    fn[off + 21] != 0x84 || fn[off + 22] != 0xC0 || fn[off + 23] != 0x5A ||
+			    fn[off + 24] != 0x59)
+				continue;
+			if (site != -1)
+			{
+				g_pLog->warn("ReconcilePin: builder call site is ambiguous; "
+				             "target-local fix disabled\n");
+				return false;
+			}
+			site = static_cast<long>(off + 16);
+		}
+		if (site < 0)
+		{
+			g_pLog->warn("ReconcilePin: builder call site not located; "
+			             "target-local fix disabled\n");
+			return false;
+		}
+		int32_t rel = 0;
+		std::memcpy(&rel, fn + site + 1, sizeof(rel));
+		const lm_address_t callAddr = evalAddr + static_cast<lm_address_t>(site);
+		const lm_address_t builderAddr = static_cast<lm_address_t>(
+		    static_cast<std::int64_t>(callAddr) + 5 + rel);
+		if (!executableAddress(builderAddr))
+		{
+			g_pLog->warn("ReconcilePin: builder target is not code; "
+			             "target-local fix disabled\n");
+			return false;
+		}
+
+		std::string reason;
+		const auto placed = DetourX64::place(
+		    builderAddr, reinterpret_cast<lm_address_t>(&hkBuildTarget), &reason);
+		if (!placed)
+		{
+			g_pLog->warn("ReconcilePin: builder hook failed (%s); "
+			             "target-local fix disabled\n", reason.c_str());
+			return false;
+		}
+		g_buildAddr = builderAddr;
+		g_buildSize = placed->displaced;
+		g_buildCallRet = static_cast<std::uintptr_t>(callAddr) + 5;
+		g_origBuild = reinterpret_cast<BuildTargetFn_t>(placed->trampoline);
+		g_pLog->info("ReconcilePin: hooked target-vector builder %p (call site %p)\n",
+		             reinterpret_cast<void*>(builderAddr),
+		             reinterpret_cast<void*>(callAddr));
+		return true;
+	}
+#else
 	// Resolve + hook the target-vector builder, derived from EvalAddr.  Returns
 	// false (and installs nothing) on any drift so the loop fix degrades to the
 	// ctx-vector patch alone rather than hooking a wrong address.
@@ -327,8 +442,14 @@ namespace
 		return true;
 	}
 
+#endif
+
+#if defined(__x86_64__)
+	std::uint64_t hkEvaluate(void* ctx, void* a1, void* a2, void* a3, void* a4, void* a5)
+#else
 	__attribute__((regparm(1)))
 	void* hkEvaluate(void* mgr, void* ctx, void* a1, void* a2)
+#endif
 	{
 		if (ctx)
 		{
@@ -346,7 +467,11 @@ namespace
 			}
 			patchTargetCtx(ctx, appId, flags);
 		}
+#if defined(__x86_64__)
+		return g_orig(ctx, a1, a2, a3, a4, a5);
+#else
 		return g_orig(mgr, ctx, a1, a2);
+#endif
 	}
 }
 
@@ -382,10 +507,17 @@ namespace ReconcilePin
 		if (LM_FindSegment(pat.address, &segment) && segment.end > pat.address)
 		{
 			const size_t readable = static_cast<size_t>(segment.end - pat.address);
+#if defined(__x86_64__)
+			const long vecOff = ReconcilePin::detail::findCtxDepotVectorOffset64(
+			    reinterpret_cast<const uint8_t*>(pat.address),
+			    readable < ReconcilePin::detail::kCtxDepotLoopScanLen
+			        ? readable : ReconcilePin::detail::kCtxDepotLoopScanLen);
+#else
 			const long vecOff = ReconcilePin::detail::findCtxDepotVectorOffset(
 			    reinterpret_cast<const uint8_t*>(pat.address),
 			    readable < ReconcilePin::detail::kCtxDepotLoopScanLen
 			        ? readable : ReconcilePin::detail::kCtxDepotLoopScanLen);
+#endif
 			if (vecOff > 0) g_ctxDepotVecOff = static_cast<size_t>(vecOff);
 		}
 		if (g_ctxDepotVecOff == 0)
@@ -395,6 +527,21 @@ namespace ReconcilePin
 		}
 
 		g_addr = pat.address;
+#if defined(__x86_64__)
+		{
+			std::string reason;
+			const auto placed = DetourX64::place(
+			    g_addr, reinterpret_cast<lm_address_t>(&hkEvaluate), &reason);
+			if (!placed)
+			{
+				g_pLog->warn("ReconcilePin: failed to install hook: %s\n", reason.c_str());
+				g_addr = LM_ADDRESS_BAD;
+				return false;
+			}
+			g_size = placed->displaced;
+			g_tramp = placed->trampoline;
+		}
+#else
 		g_size = LM_HookCode(g_addr,
 		                     reinterpret_cast<lm_address_t>(&hkEvaluate),
 		                     &g_tramp);
@@ -406,6 +553,7 @@ namespace ReconcilePin
 			g_size = 0;
 			return false;
 		}
+#endif
 		g_orig = reinterpret_cast<ReconFn_t>(g_tramp);
 		g_pLog->info("ReconcilePin: hooked EvaluateConfigChanges at %p "
 		             "(pin=%d empty=1 trace=%d ctx_depots=+0x%zx)\n",
@@ -424,6 +572,10 @@ namespace ReconcilePin
 
 	void remove()
 	{
+#if defined(__x86_64__)
+		if (g_buildSize && g_buildAddr != LM_ADDRESS_BAD)
+			DetourX64::remove(g_buildAddr);
+#else
 		if (g_buildSize && g_buildAddr != LM_ADDRESS_BAD)
 		{
 			lm_prot_t oldProt = LM_PROT_NONE;
@@ -433,14 +585,20 @@ namespace ReconcilePin
 				LM_ProtMemory(g_buildAddr, g_buildSize, oldProt, nullptr);
 			}
 		}
+#endif
 		g_origBuild = nullptr;
 		g_buildAddr = LM_ADDRESS_BAD;
 		g_buildSize = 0;
 
+#if defined(__x86_64__)
+		if (g_size && g_addr != LM_ADDRESS_BAD)
+			DetourX64::remove(g_addr);
+#else
 		if (g_size && g_addr != LM_ADDRESS_BAD && g_tramp != LM_ADDRESS_BAD)
 		{
 			LM_UnhookCode(g_addr, g_tramp, g_size);
 		}
+#endif
 		g_orig = nullptr;
 		g_addr = LM_ADDRESS_BAD;
 		g_tramp = LM_ADDRESS_BAD;
