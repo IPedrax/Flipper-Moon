@@ -17,13 +17,16 @@ check() {
 
 releases='[
   {"tag_name":"v2.9","draft":false,"prerelease":false,"assets":[
-    {"name":"slsteam-moon-linux-2.9-lumen.zip.uploading","browser_download_url":"https://github.invalid/temp"}
+    {"name":"slsteam-moon-linux-2.9-x86_64.zip.uploading","browser_download_url":"https://github.invalid/temp"}
+  ]},
+  {"tag_name":"v2.9-i386","draft":false,"prerelease":false,"assets":[
+    {"name":"slsteam-moon-linux-2.9-lumen.zip","browser_download_url":"https://github.invalid/i386.zip"}
   ]},
   {"tag_name":"v2.8","draft":false,"prerelease":false,"assets":[
-    {"name":"slsteam-moon-linux-2.8-lumen.zip","browser_download_url":"https://github.invalid/v2.8.zip"}
+    {"name":"slsteam-moon-linux-2.8-x86_64.zip","browser_download_url":"https://github.invalid/v2.8.zip"}
   ]}
 ]'
-check "temporary asset is ignored" "$(resolve_github_asset "$releases")" \
+check "temporary and 32-bit assets are ignored" "$(resolve_github_asset "$releases")" \
 	"https://github.invalid/v2.8.zip"
 
 manifest='{

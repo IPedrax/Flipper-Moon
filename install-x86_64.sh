@@ -15,6 +15,12 @@
 #  With the legacy 32-bit client (sentinel .steam-disable-steamrt64-client, or
 #  STEAM_FORCE_CLIENT=ubuntu12_32|scout|ldlp) everything is delegated unchanged.
 #
+#  Lumen and the LuaTools menu ship with swwayps/* repositories hard-coded for the
+#  update check, the "Update All" button and the auto-fix offer. After Lumen is
+#  installed, those few strings are repointed to this repository (repoint_lumen), so
+#  an update installs this build instead of the 32-bit one. If Lumen's files no longer
+#  contain the expected strings, the installer says so and exits non-zero.
+#
 #  The stock installer is sourced, not forked: it ends with
 #  `[ -z "$SLSPLUGIN_LIB_ONLY" ] && main`, so its functions load without running and
 #  we override only the two above. Upstream fixes keep flowing in.
@@ -36,6 +42,7 @@ UPSTREAM_FILE="${LUATOOLS_INSTALL_FILE:-}"
 UPSTREAM_SHA256="${LUATOOLS_INSTALL_SHA256:-}"
 SLSM_ZIP="${SLSM_ZIP:-}"
 # x86_64 release asset of slsteam-moon (scripts/package.sh names it this way).
+SLSM_X64_REPO="${SLSM_X64_REPO:-ogb4n/slsteam-moon-x64}"
 SLSM_X64_ASSET_GLOB='^slsteam-moon-linux-.*-x86_64\.zip$'
 
 die() { echo "install-x86_64: $*" >&2; exit 1; }
@@ -107,11 +114,63 @@ load_stock_installer() {
 }
 
 # ---------------------------------------------------------------------------
+# Lumen ships with the upstream repositories hard-coded. Repoint the three places
+# that would otherwise replace this 64-bit build with the 32-bit one: the update
+# comparison, the Update All installer URL and the auto-fix script URL.
+# Literal replacement (no regex); a string already replaced counts as done.
+# ---------------------------------------------------------------------------
+repoint_lumen() {
+	local dir="${1:-${LUMEN_DIR:-$HOME/.local/share/Lumen}}"
+	local raw="https://raw.githubusercontent.com/$SLSM_X64_REPO/main"
+	local up_install="https://raw.githubusercontent.com/swwayps/luatools-moon/main/install.sh"
+	local up_autofix="https://raw.githubusercontent.com/swwayps/slsteam-moon/slsteam-moon/autofix.sh"
+	local -a files=() from=() to=()
+	shopt -u patsub_replacement 2>/dev/null || true
+
+	files+=(lua/about.lua); from+=('repo = "swwayps/slsteam-moon",'); to+=("repo = \"$SLSM_X64_REPO\",")
+	files+=(lua/about.lua); from+=('mirror_key = "slsteam-moon",'); to+=('mirror_key = "slsteam-moon-x64",')
+	files+=(lua/about.lua); from+=('asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$",'); to+=('asset_pat = "^slsteam%-moon%-linux%-.*%-x86_64%.zip$",')
+	files+=(lua/about.lua); from+=("$up_install"); to+=("$raw/install-x86_64.sh")
+	files+=(lua/slscheck.lua); from+=("$up_autofix"); to+=("$raw/autofix.sh")
+	files+=(lua/menu/02-i18n.js); from+=("$up_install"); to+=("$raw/install-x86_64.sh")
+	files+=(lua/menu/02-i18n.js); from+=("$up_autofix"); to+=("$raw/autofix.sh")
+
+	local i f c rc=0
+	for i in "${!files[@]}"; do
+		f="$dir/${files[$i]}"
+		if [ ! -f "$f" ]; then
+			log_warn "repoint_lumen: ${files[$i]} not found in $dir"; rc=1; continue
+		fi
+		c="$(cat -- "$f"; printf x)"; c="${c%x}"
+		if [[ "$c" == *"${from[$i]}"* ]]; then
+			printf '%s' "${c//"${from[$i]}"/${to[$i]}}" > "$f" || { rc=1; continue; }
+		elif [[ "$c" != *"${to[$i]}"* ]]; then
+			log_warn "repoint_lumen: expected text not found in ${files[$i]}: ${from[$i]}"; rc=1
+		fi
+	done
+	if [ "$rc" -ne 0 ]; then
+		log_warn "$(L "Lumen's files changed: its update check and Update All may still point at the 32-bit build. Do not use Update All; report this at https://github.com/$SLSM_X64_REPO/issues" \
+		             "Os arquivos do Lumen mudaram: a verificação de updates e o Update All podem apontar para o build de 32 bits. Não use o Update All; avise em https://github.com/$SLSM_X64_REPO/issues")"
+		SLSM_REPOINT_FAILED=1
+	fi
+	return "$rc"
+}
+
+# ---------------------------------------------------------------------------
 # Overrides (defined after the stock functions are loaded).
 # ---------------------------------------------------------------------------
 define_overrides() {
 	eval "orig_$(declare -f install_slsteam_moon)"
 	eval "orig_$(declare -f install_cloudredirect)"
+	if declare -F install_lumen >/dev/null; then
+		eval "orig_$(declare -f install_lumen)"
+		install_lumen() {
+			orig_install_lumen "$@" || return
+			slsm_client_is_64bit || return 0
+			log_info "$(L "Pointing Lumen's updates at $SLSM_X64_REPO" "Apontando as atualizações do Lumen para $SLSM_X64_REPO")"
+			repoint_lumen || true
+		}
+	fi
 
 	install_slsteam_moon() {
 		slsm_client_is_64bit || { orig_install_slsteam_moon; return; }
@@ -204,6 +263,7 @@ main_x86_64() {
 		             "Cliente Steam de 32 bits em uso (ou Steam ainda não inicializada): comportamento padrão.")"
 	fi
 	main "${PASSTHRU[@]+"${PASSTHRU[@]}"}"
+	[ "${SLSM_REPOINT_FAILED:-0}" = 0 ] || exit 1
 }
 
 # Sourced by tests with SLSM_X64_LIB_ONLY=1.

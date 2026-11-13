@@ -4,7 +4,7 @@
 #
 # Runs when Lumen detects that slsteam-moon did NOT inject into the current
 # Steam session (the "Buy" button shows on games added via LuaTools). It:
-#   1. downloads the LATEST slsteam-moon (Lumen) release asset,
+#   1. downloads the LATEST x86_64 release asset of ogb4n/slsteam-moon-x64,
 #   2. runs its setup.sh install — which stops Steam, installs the library and
 #      repairs EVERY *steam*.desktop launcher on the system (prompting for the
 #      sudo password here in the terminal for the system-wide entries),
@@ -18,14 +18,17 @@
 # ============================================================================
 set -u
 
-REPO="swwayps/slsteam-moon"
+# The 64-bit build lives in this repository; AUTOFIX_REPO overrides it.
+REPO="${AUTOFIX_REPO:-ogb4n/slsteam-moon-x64}"
 # Asset name matcher. jq's test() sees the parsed .name (no surrounding quotes),
 # so it uses '.*'; the grep fallback scans raw JSON, so it uses '[^"]*' to avoid
 # crossing a quote. Both use '[.]' for a literal dot (a bare '\.' is not a valid
 # jq string escape and a raw '"' inside a jq "..." string breaks the parse).
-ASSET_RE_JQ='^slsteam-moon-linux-.*-lumen[.]zip$'
-ASSET_RE_GREP='slsteam-moon-linux-[^"]*-lumen[.]zip"'
-MIRROR_MANIFEST="https://cdn.jsdelivr.net/gh/swwayps/jsdelivr@main/manifest.json"
+ASSET_RE_JQ='^slsteam-moon-linux-.*-x86_64[.]zip$'
+ASSET_RE_GREP='slsteam-moon-linux-[^"]*-x86_64[.]zip"'
+# No mirror: the upstream jsDelivr mirror only carries the 32-bit release, which a
+# 64-bit client cannot load. Setting a manifest URL here re-enables the fallback.
+MIRROR_MANIFEST=""
 SLSDIR="$HOME/.local/share/SLSsteam"
 WRAPPER="$SLSDIR/path/steam"
 
@@ -108,20 +111,24 @@ echo
 
 command -v curl >/dev/null 2>&1 || die "curl is required but not installed."
 
-# ── 1. resolve the latest -lumen release asset ──────────────────────────────
+# ── 1. resolve the latest x86_64 release asset ──────────────────────────────
 info "Finding the latest slsteam-moon release"
 API="https://api.github.com/repos/${REPO}/releases?per_page=50"
 RELEASES_JSON="$(curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 \
 	-H 'Accept: application/vnd.github+json' "$API" 2>/dev/null || true)"
 URL="$(resolve_github_asset "$RELEASES_JSON" 2>/dev/null || true)"
 
-MIRROR_JSON="$(curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 \
-	-H 'Accept: application/json' "$MIRROR_MANIFEST" 2>/dev/null || true)"
-MIRROR_ENTRY="$(resolve_mirror_entry "$MIRROR_JSON" 2>/dev/null || true)"
-IFS=$'\t' read -r MIRROR_URL MIRROR_SHA <<< "$MIRROR_ENTRY"
-if ! valid_mirror_entry "${MIRROR_URL:-}" "${MIRROR_SHA:-}"; then
-	MIRROR_URL=""
-	MIRROR_SHA=""
+MIRROR_URL=""
+MIRROR_SHA=""
+if [ -n "$MIRROR_MANIFEST" ]; then
+	MIRROR_JSON="$(curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 \
+		-H 'Accept: application/json' "$MIRROR_MANIFEST" 2>/dev/null || true)"
+	MIRROR_ENTRY="$(resolve_mirror_entry "$MIRROR_JSON" 2>/dev/null || true)"
+	IFS=$'\t' read -r MIRROR_URL MIRROR_SHA <<< "$MIRROR_ENTRY"
+	if ! valid_mirror_entry "${MIRROR_URL:-}" "${MIRROR_SHA:-}"; then
+		MIRROR_URL=""
+		MIRROR_SHA=""
+	fi
 fi
 
 EXPECTED_SHA=""
@@ -129,7 +136,7 @@ if [ -z "${URL:-}" ] && [ -n "$MIRROR_URL" ]; then
 	URL="$MIRROR_URL"
 	EXPECTED_SHA="$MIRROR_SHA"
 fi
-[ -n "${URL:-}" ] || die "Could not reach GitHub or the jsDelivr release mirror."
+[ -n "${URL:-}" ] || die "Could not find an x86_64 release on GitHub (check the connection)."
 ok "Found: $URL"
 
 # ── 2. download + extract ───────────────────────────────────────────────────

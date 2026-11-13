@@ -18,6 +18,12 @@ the pieces that cannot work on a 64-bit client replaced):
 ./install-x86_64.sh --slsteam-zip slsteam-moon-linux-<version>-x86_64.zip
 ```
 
+Updates: after installing Lumen, the installer repoints the few places where Lumen
+hard-codes the upstream repositories (the About tab's update check, the Update All
+button, the auto-fix offer) to this repository, so Update All installs the latest
+x86_64 release here instead of the 32-bit upstream one. Lumen and the LuaTools plugin
+themselves are still downloaded from their upstream repositories.
+
 Build: [`docs/BUILDING.md`](docs/BUILDING.md). Upstream history is kept; the 32-bit code
 is still in the tree and will be removed in a separate change.
 
