@@ -21,6 +21,22 @@ inline constexpr std::uint32_t hiddenOwnershipFlags(
 	return 0;
 }
 
+// x86_64: `41 8B /r disp8` = `mov r32,[r8-r15+disp8]` (REX.B).  The destination register is
+// free; a SIB base (rm=100) is refused, as is any other REX prefix.
+inline std::optional<std::size_t> deriveOwnershipOffset64(
+	std::span<const std::uint8_t> instruction) noexcept
+{
+	if (instruction.size() < 4 || instruction[0] != 0x41 || instruction[1] != 0x8B ||
+		(instruction[2] & 0xC0) != 0x40 || (instruction[2] & 0x07) == 0x04)
+	{
+		return std::nullopt;
+	}
+	const std::size_t offset = instruction[3];
+	if (offset == 0 || offset > 0x100 || (offset % alignof(std::uint32_t)) != 0)
+		return std::nullopt;
+	return offset;
+}
+
 inline std::optional<std::size_t> deriveOwnershipOffset(
 	std::span<const std::uint8_t> instruction) noexcept
 {

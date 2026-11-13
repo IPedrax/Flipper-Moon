@@ -288,7 +288,7 @@ static int audit(const char* modulePath, const char* sourcePath, bool steamUi)
 
 		if (locator.follow == PatternsX64::Follow::StringXref)
 		{
-			const auto function = RttiVtable::functionReferencingAll(view, locator.xrefStrings, locator.preferMostCalled);
+			const auto function = RttiVtable::functionReferencingAll(view, locator.xrefStrings, locator.preferMostCalled, locator.preferFewestCalled);
 			if (!function)
 			{
 				fail(name + ": the strings do not resolve to exactly one function");
@@ -299,7 +299,7 @@ static int audit(const char* modulePath, const char* sourcePath, bool steamUi)
 				fail(name + ": string-xref target is not a function entry in .eh_frame");
 				continue;
 			}
-			const auto inProcess = RttiVtable::functionReferencingAll(loaded, locator.xrefStrings, locator.preferMostCalled);
+			const auto inProcess = RttiVtable::functionReferencingAll(loaded, locator.xrefStrings, locator.preferMostCalled, locator.preferFewestCalled);
 			if (!inProcess || *inProcess != *function)
 			{
 				fail(name + ": the relocated-memory view resolves differently from the file view");

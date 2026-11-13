@@ -30,9 +30,31 @@ enum class EBillingType : uint32_t {};
 enum class ELicenseType : uint32_t {};
 
 #if defined(__x86_64__)
-// Layout not yet verified against the steamrt64 client; see PLAN.md phase 4.
-// Only the forward declaration is usable on x86_64.
-struct PackageInfo;
+// steamrt64 layout, read from CPackageInfoCache::LoadPackage (the function that
+// fills it): header fields identical to i386 up to +0x30, then 8-byte pointers and
+// 24-byte CUtlVectors (base +0, capacity +8, size +0x10).  A third vector at +0x70
+// is not modelled; nothing here touches it.
+static_assert(sizeof(CUtlMemory<uint32_t>) == 16, "CUtlMemory layout drift");
+static_assert(sizeof(CUtlVector<uint32_t>) == 24, "CUtlVector layout drift");
+
+struct PackageInfo
+{
+	uint32_t PackageId;        // +0x00
+	int32_t ChangeNumber;      // +0x04
+	uint64_t PICS_token;       // +0x08
+	EBillingType BillingType;  // +0x10
+	ELicenseType LicenseType;  // +0x14
+	EPackageStatus Status;     // +0x18
+	uint8_t SHA_1_Hash[20];    // +0x1C
+	void* pPackageInfoNodeBegin; // +0x30
+	void* pExtendNodeBegin;    // +0x38
+	CUtlVector<uint32_t> AppIdVec;   // +0x40
+	CUtlVector<uint32_t> DepotIdVec; // +0x58
+};
+static_assert(offsetof(PackageInfo, Status)     == 0x18, "PackageInfo::Status drift");
+static_assert(offsetof(PackageInfo, SHA_1_Hash) == 0x1C, "PackageInfo::SHA_1_Hash drift");
+static_assert(offsetof(PackageInfo, AppIdVec)   == 0x40, "PackageInfo::AppIdVec drift");
+static_assert(offsetof(PackageInfo, DepotIdVec) == 0x58, "PackageInfo::DepotIdVec drift");
 #else
 static_assert(sizeof(CUtlMemory<uint32_t>) == 12, "CUtlMemory layout drift");
 

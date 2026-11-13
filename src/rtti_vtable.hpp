@@ -424,7 +424,8 @@ namespace RttiVtable
 	// them is called strictly more often than all the others (an overload family
 	// whose public entry has the call sites).
 	inline std::optional<std::uint64_t> functionReferencingAll(
-		const Image& image, const std::vector<std::string_view>& texts, bool preferMostCalled = false)
+		const Image& image, const std::vector<std::string_view>& texts, bool preferMostCalled = false,
+		bool preferFewestCalled = false)
 	{
 		std::optional<std::vector<std::uint64_t>> common;
 		for (const std::string_view text : texts)
@@ -445,6 +446,29 @@ namespace RttiVtable
 			return std::nullopt;
 		if (common->size() == 1)
 			return common->front();
+		if (preferFewestCalled)
+		{
+			std::optional<std::uint64_t> fewest;
+			std::size_t fewestCount = 0;
+			std::size_t secondFewest = 0;
+			bool first = true;
+			for (const std::uint64_t candidate : *common)
+			{
+				const std::size_t calls = directCallers(image, candidate);
+				if (first || calls < fewestCount)
+				{
+					secondFewest = first ? calls : fewestCount;
+					fewestCount = calls;
+					fewest = candidate;
+					first = false;
+				}
+				else if (calls < secondFewest || secondFewest == fewestCount)
+					secondFewest = calls;
+			}
+			if (!fewest || fewestCount == secondFewest)
+				return std::nullopt;
+			return fewest;
+		}
 		if (!preferMostCalled)
 			return std::nullopt;
 		std::optional<std::uint64_t> best;

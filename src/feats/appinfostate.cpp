@@ -8,6 +8,10 @@
 #include "../patterns.hpp"
 
 #include "libmem/libmem.h"
+#if defined(__x86_64__)
+#include "../detour_x64.hpp"
+#include <string>
+#endif
 
 #include <array>
 #include <atomic>
@@ -24,9 +28,13 @@ using Store = HotReloadState::Store;
 using Layout = AppDataLayout::Layout;
 using PatchState = AppInfoState::PatchState;
 
+#if defined(__x86_64__)
+using GetOrAddAppDataFn = void* (void*, std::uint32_t, bool);
+#else
 using GetOrAddAppDataFn = void* (__attribute__((cdecl))) (
 	void*, std::uint32_t, bool
 );
+#endif
 using GetOrAddAppDataPtr = GetOrAddAppDataFn*;
 using ReadFromDiskPtr = AppInfoReload::ReadFromDiskFn;
 
@@ -439,7 +447,11 @@ void discardAfterVerifiedRestoreLocked() noexcept
 	(void)releaseTrampolineLocked();
 }
 
+#if defined(__x86_64__)
+void* hkGetOrAddAppData(
+#else
 void* __attribute__((cdecl)) hkGetOrAddAppData(
+#endif
 	void* cache,
 	std::uint32_t appId,
 	bool create
@@ -471,6 +483,88 @@ void* __attribute__((cdecl)) hkGetOrAddAppData(
 		data, appId, create, read, authoritativeRead, layout);
 }
 
+#if defined(__x86_64__)
+// x86_64: the detour is a DetourX64 trampoline, not the 5-byte i386 patch, so none of the
+// PatchState machinery applies.  The layout is decoded from the two code sites the table
+// pins (REX.W `cmp [r+0x20],r` for the SHA, `movzx r,[r+0x14]` for the skip flag) and a
+// mismatch refuses the hook rather than guessing offsets.
+bool installLocked(Store& store)
+{
+	const Pattern_t& functionPattern = Patterns::CAppInfoCache::GetOrAddAppData;
+	const Pattern_t& readPattern = Patterns::CAppInfoCache::ThreadedReadFromDisk;
+	const Pattern_t& skipPattern = Patterns::CAppInfoCache::SkipFlagReference;
+	const Pattern_t& shaPattern = Patterns::CAppInfoCache::ShaReference;
+	if (!validPattern(functionPattern, 16) || !validPattern(skipPattern, 4) ||
+		!validPattern(shaPattern, 4))
+	{
+		discardBeforePatchLocked();
+		return false;
+	}
+
+	std::array<std::uint8_t, 4> skipInstruction{};
+	std::array<std::uint8_t, 4> shaInstruction{};
+	if (!readExact(skipPattern.address, skipInstruction.data(), skipInstruction.size()) ||
+		!readExact(shaPattern.address, shaInstruction.data(), shaInstruction.size()))
+	{
+		discardBeforePatchLocked();
+		return false;
+	}
+	// 0F B6 /r disp8 (mod=01, no SIB) and 48 39 /r disp8 (mod=01, no SIB).
+	const bool skipShape = skipInstruction[0] == 0x0F && skipInstruction[1] == 0xB6 &&
+		(skipInstruction[2] & 0xC0) == 0x40 && (skipInstruction[2] & 0x07) != 0x04;
+	const bool shaShape = shaInstruction[0] == 0x48 && shaInstruction[1] == 0x39 &&
+		(shaInstruction[2] & 0xC0) == 0x40 && (shaInstruction[2] & 0x07) != 0x04;
+	const std::uint32_t skipOffset = skipInstruction[3];
+	const std::uint32_t shaOffset = shaInstruction[3];
+	if (!skipShape || !shaShape || skipOffset >= 0x100 || shaOffset >= 0x100 ||
+		shaOffset < skipOffset + 1 || shaOffset % 4 != 0)
+	{
+		discardBeforePatchLocked();
+		return false;
+	}
+
+	std::string reason;
+	const auto placed = DetourX64::place(
+		functionPattern.address,
+		reinterpret_cast<lm_address_t>(&hkGetOrAddAppData), &reason);
+	if (!placed)
+	{
+		if (g_pLog != nullptr)
+			g_pLog->warn("AppInfoState: GetOrAddAppData detour failed: %s\n", reason.c_str());
+		discardBeforePatchLocked();
+		return false;
+	}
+
+	// The trampoline belongs to DetourX64 and stays mapped; never hand it to libmem's allocator.
+	g_target = functionPattern.address;
+	g_trampoline = LM_ADDRESS_BAD;
+	g_hookSize = placed->displaced;
+	g_skipOffset.store(skipOffset, std::memory_order_release);
+	g_shaOffset.store(shaOffset, std::memory_order_release);
+	g_store.store(&store, std::memory_order_release);
+	g_original.store(
+		reinterpret_cast<GetOrAddAppDataPtr>(placed->trampoline),
+		std::memory_order_release);
+	g_readFromDisk.store(
+		validPattern(readPattern, 1)
+			? reinterpret_cast<ReadFromDiskPtr>(readPattern.address)
+			: nullptr,
+		std::memory_order_release);
+	g_lifecycle.markProvisional(true);
+	if (!g_lifecycle.activate())
+	{
+		DetourX64::remove(g_target);
+		g_store.store(nullptr, std::memory_order_release);
+		(void)g_lifecycle.finishUnhook(true);
+		discardAfterVerifiedRestoreLocked();
+		return false;
+	}
+	if (g_pLog != nullptr)
+		g_pLog->info("AppInfoState: GetOrAddAppData hooked (skip +0x%x, sha +0x%x)\n",
+			skipOffset, shaOffset);
+	return true;
+}
+#else
 // Deliberately not noexcept: PIC repair may allocate through libmem helpers.
 // This function reaches that potentially-throwing work before the lifecycle
 // is provisional and before any target byte is changed; setup's outer catch
@@ -628,6 +722,7 @@ bool installLocked(Store& store)
 	}
 	return false;
 }
+#endif
 }
 
 namespace AppInfoState
@@ -699,7 +794,12 @@ void remove() noexcept
 		while (!g_lifecycle.readersDrained())
 			std::this_thread::yield();
 
+#if defined(__x86_64__)
+		const PatchResult result = DetourX64::remove(g_target)
+			? PatchResult::Restored : PatchResult::Catastrophic;
+#else
 		const PatchResult result = g_patch.restore(targetAccess());
+#endif
 		if (result == PatchResult::Restored ||
 			result == PatchResult::Untouched)
 		{

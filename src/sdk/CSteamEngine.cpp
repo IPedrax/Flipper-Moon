@@ -105,10 +105,18 @@ IClientCompat* getLocalClientCompat()
 	if (user == nullptr || instruction == 0 || instruction == LM_ADDRESS_BAD)
 		return nullptr;
 
+#if defined(__x86_64__)
+	std::array<std::uint8_t, 7> bytes{};
+#else
 	std::array<std::uint8_t, 6> bytes{};
+#endif
 	if (LM_ReadMemory(instruction, bytes.data(), bytes.size()) != bytes.size())
 		return nullptr;
+#if defined(__x86_64__)
+	const auto offset = CompatLive::decodeManagerOffset64(bytes);
+#else
 	const auto offset = CompatLive::decodeManagerOffset(bytes);
+#endif
 	if (!offset.has_value()) return nullptr;
 
 	auto* const compat = reinterpret_cast<IClientCompat*>(

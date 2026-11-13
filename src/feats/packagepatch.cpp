@@ -4,36 +4,6 @@
 
 #include "packagepatch.hpp"
 
-// The PackageInfo / LoadPackage layout is only reverse-engineered for the
-// Linux i386 client (see sdk/CPackageInfo.hpp). Until the steamrt64 layout is
-// verified against the 64-bit steamclient.so (PLAN.md, phase 4) the hook stays
-// off instead of running with guessed offsets.
-#if defined(__x86_64__)
-
-#include "../globals.hpp"
-#include "../log.hpp"
-
-namespace PackagePatch
-{
-	bool isInjectedAppId(uint32_t) { return false; }
-	bool setup()
-	{
-		if (g_pLog) g_pLog->warn("PackagePatch: not ported to x86_64 yet, package hot reload disabled\n");
-		return false;
-	}
-	void remove() {}
-	bool injectIntoPackage0(const std::vector<uint32_t>&) { return false; }
-	void setExtraAppIds(const std::vector<uint32_t>&) {}
-	void tryReconcileLicenses() {}
-	void forceReconcileLicenses() {}
-	void synchronizePackage0(const PackageSnapshot&) {}
-	bool runtimeRefreshReady() { return false; }
-	bool runtimeRefreshPending() noexcept { return false; }
-	void reprocessCurrentState() noexcept {}
-}
-
-#else
-
 
 #include "../afftrace.hpp"
 #include "../config.hpp"
@@ -58,6 +28,9 @@ namespace PackagePatch
 #include "manifestdonor.hpp"
 
 #include "libmem/libmem.h"
+#if defined(__x86_64__)
+#include "../detour_x64.hpp"
+#endif
 
 #include <atomic>
 #include <algorithm>
@@ -973,6 +946,20 @@ namespace PackagePatch
 		}
 
 		g_loadPackageAddr  = Patterns::CPackageInfoCache::LoadPackage.address;
+#if defined(__x86_64__)
+		{
+			std::string reason;
+			const auto placed = DetourX64::place(
+				g_loadPackageAddr, reinterpret_cast<lm_address_t>(&hkLoadPackage), &reason);
+			if (!placed)
+			{
+				g_pLog->warn("PackagePatch: failed to install LoadPackage hook: %s\n", reason.c_str());
+				return false;
+			}
+			g_loadPackageHookSize = placed->displaced;
+			g_loadPackageTramp = placed->trampoline;
+		}
+#else
 		g_loadPackageHookSize = LM_HookCode
 		(
 			g_loadPackageAddr,
@@ -988,6 +975,7 @@ namespace PackagePatch
 
 		MemHlp::fixPICThunkCall("CPackageInfoCache::LoadPackage",
 			g_loadPackageAddr, g_loadPackageTramp);
+#endif
 
 		g_pOrigLoadPackage = reinterpret_cast<LoadPackage_t>(g_loadPackageTramp);
 
@@ -1006,7 +994,11 @@ namespace PackagePatch
 		if (g_loadPackageHookSize && g_loadPackageAddr != LM_ADDRESS_BAD
 		    && g_loadPackageTramp != LM_ADDRESS_BAD)
 		{
+#if defined(__x86_64__)
+			DetourX64::remove(g_loadPackageAddr);
+#else
 			LM_UnhookCode(g_loadPackageAddr, g_loadPackageTramp, g_loadPackageHookSize);
+#endif
 			g_loadPackageHookSize = 0;
 		}
 		g_pOrigLoadPackage = nullptr;
@@ -1240,4 +1232,3 @@ namespace PackagePatch
 	}
 }
 
-#endif // __x86_64__

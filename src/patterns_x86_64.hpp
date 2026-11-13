@@ -62,6 +62,13 @@ namespace PatternsX64
 		// StringXref only: break a tie between several referencing functions by
 		// direct-call count (see RttiVtable::functionReferencingAll).
 		bool preferMostCalled = false;
+		// StringXref only: the opposite tie-break, for a function whose twin (same
+		// strings) is the one with the many call sites.
+		bool preferFewestCalled = false;
+		// false = located and audited offline, but not scanned in the process: its
+		// hook is not ported to the 64-bit layouts yet, so resolving it would install
+		// an i386-shaped hook on a 64-bit function.
+		bool bindAtRuntime = true;
 	};
 
 	inline const std::vector<Locator>& locators()
@@ -177,6 +184,104 @@ namespace PatternsX64
 			  "", "", -1, {}, {}, false, {},
 			  { "CDepotDownloadMgr::BYldRequestDepotManifest(App: %d, Depot: %d, Manifest: %llu, branch: %s): Failed to get manifest request code, '%s'",
 			    "CDepotDownloadMgr::BYldRequestDepotManifest: same manifest %llu requested twice" } },
+			// ---- Located (audited offline), hooks not ported to 64-bit yet: bindAtRuntime=false.
+			// Each was matched to its i386 twin by shared strings AND by direct-caller
+			// counts (tools/re/rosette.py, callers.py).
+			// "config changed : added/updated/removed depots": one function.  i386 twin 0x11d14e0.
+			{ "CDepotDownloadMgr::EvaluateConfigChanges", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "AppID %u %sconfig changed : added depots %s",
+			    "AppID %u %sconfig changed : updated depots %s",
+			    "AppID %u %sconfig changed : removed depots %s" }, false, false, false },
+			// Bound at runtime (hook ported: ManifestBind).  Arguments checked in the
+			// disassembly: rdi ctx, rsi, edx appId, ecx depotId, r8 manifestId (the
+			// "%s/depotcache/%d_%llu.manifest" asprintf takes ecx and r8), r9.
+			// i386 twin 0x1187310: 4 direct callers, one of them PrepareDepotDownload (as here).
+			{ "CDepotDownloadMgr::ProcessDepotManifest", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "WARNING! Deleted corrupt manifest file \"%s\" (%s)." } },
+			// i386 twin 0x1187850: 2 direct callers on both sides.
+			{ "CDepotDownloadMgr::PrepareDepotDownload", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "Failed to decrypt cached manifest %d_%llu",
+			    "Failed to write cached manifest %d_%llu" } },
+			// i386 twin 0x11783a0 (2 callers on both sides). Parses package records: the only
+			// function that loads both the AppItemID assertion and the corrupt-package log.
+			{ "CPackageInfoCache::LoadPackage", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "item.m_unAppItemID != -1", "Corrupt data in buffer for package %u, CLN %u," }, false },
+			// CUtlMemory<uint32>::Grow, taken from its call in LoadPackage (grow AppIdVec by
+			// `needed - capacity`). i386 twin 0x116e210; 129 callers here, 126 there.
+			{ "CUtlMemory::Grow", "E8 ? ? ? ? 8B 43 50 8D 70 01 EB", Follow::Relative, {} },
+			// steamui.so, live library removal.  RunFrame is slot 3 of CSteamUIAppController
+			// (no direct caller, like its i386 twin; it shares 7 of 7 assertion strings).
+			{ "CSteamUIAppController::RunFrame", "", Follow::VtableSlot, {},
+			  "21CSteamUIAppController", "", 3, {}, {}, true, "CUtlHashMap::RemoveAt - Invalid index" },
+			// (controller, appid, create).  Two functions carry both strings; the i386 twin
+			// has 236 direct callers, this one 248 and the other overload 54.
+			{ "CSteamUIAppController::GetAppByID", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, true, {},
+			  { "CSteamUIAppController::GetAppByID", "CSteamUIAppController::GetAppByID - Create" }, true },
+			// (source, appid, change_flags).
+			{ "CUpdateManager::MarkAppChange", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, true, {},
+			  { "CUpdateManager::MarkAppChange" } },
+			// `mov edx,[r14+0x1c]` right before the eAppOwnershipFlags field is serialized in
+			// FillInAppOverview (i386: +0x18, so +4 for the vtable pointer). The destination
+			// register is the wildcard, the displacement and what follows are pinned.
+			{ "CSteamApp::OwnershipFlagsReference",
+			  "41 8B ? 1C 48 8B BD ? ? ? ? 48 8D 35 ? ? ? ? E8",
+			  Follow::None, {}, "", "", -1, {}, {}, true },
+			// License refresh helpers (CUser methods, `this` in rdi).  Found through the i386 twins:
+			// Mark has 5 direct callers on both sides and the same murmur-style hash of the package
+			// id; Process (2 callers on both sides) walks the pending vector (stride 0x50), marks
+			// each entry, then calls Notify and returns true.  Notify is the only function that
+			// carries both strings.  Member offsets (0x2380, 0x23c4) are wildcarded in the signatures.
+			{ "CUser::MarkLicenseAsChanged",
+			  "41 57 48 8D 87 ? ? 00 00 41 89 F7 41 56 41 55 41 54 55 53 48 83 EC ? 88 54 24 ? 8B 97 ? ? 00 00",
+			  Follow::None, {} },
+			{ "CUser::ProcessPendingLicenseUpdates",
+			  "41 54 49 89 FC 55 53 8B 9F ? ? 00 00 83 EB 01 78 ? 48 63 C3 48 8D 2C 80 48 C1 E5 04",
+			  Follow::None, {} },
+			{ "CUser::NotifyLicensesUpdated", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "17LicensesUpdated_t", "SendAppLicenseUpdates" } },
+			// CCompatManager is a member of CUser, built by CUser's constructor: `lea rax,[rbx+disp32]`
+			// (the manager, 0x4b58 on this client) then `call ctor(rdi=manager, rsi=CUser)`; the ctor
+			// 0x11e20d0 stores the vtable at 0x316b2a8 and has this one caller.  AppInfo-style in-place
+			// decoding: the displacement is read from the instruction, never pinned here.
+			{ "CUser::m_CompatManager",
+			  "48 8D 83 ? ? 00 00 48 89 DE 48 89 C7 48 89 84 24 ? ? 00 00 E8 ? ? ? ? 66 0F 6F 1D ? ? ? ? 48 89 DE 48 C7 83 ? ? 00 00 FF FF FF FF",
+			  Follow::None, {} },
+			// i386 twin 0x133cc30: 8 direct callers on both sides; its sibling that shares
+			// the log line has 2.
+			{ "CDepotDownloadMgr::BuildDepotDependency", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "Failed to initialize depot %u, manifest %llu (%s)" }, true },
+			// GetOrAddAppData(cache, appid, create).  Taken from its call in CUser's license walk
+			// (followed by the SHA compare below), which is unique.  The string xref used first
+			// ("GetOrAddAppData" + three assertion strings, fewest-called tie-break against a twin
+			// with 13 callers) resolved offline but not in the live process, where it matched
+			// several functions.
+			{ "CAppInfoCache::GetOrAddAppData",
+			  "E8 ? ? ? ? 48 8D 15 ? ? ? ? 48 8B ? 48 39 ? 20 75",
+			  Follow::Relative, {} },
+			// AppData layout, read in CUser's license walk (BCheckUserLicensesUpdate), which looks the
+			// entry up with GetOrAddAppData(cache, appid, false): the SHA-1 is compared in three
+			// pieces at +0x20/+0x28/+0x30 (i386: +0x1c), and the skip flag is the byte at +0x14
+			// (i386: +0x10).  Both sites are decoded in place by AppInfoState; Follow::None keeps
+			// the instruction address.
+			{ "CAppInfoCache::ShaReference",
+			  "48 39 ? 20 75 ? 48 8B ? 08 48 39 ? 28 75 ? 8B ? 10 39 ? 30",
+			  Follow::None, {} },
+			{ "CAppInfoCache::SkipFlagReference",
+			  "0F B6 ? 14 48 83 ? 01 20 ? 24 ? 39 ? ?",
+			  Follow::None, {} },
+			// i386 twin 0x11716f0, one direct caller on both sides.
+			{ "CAppInfoCache::ThreadedReadFromDisk", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "ThreadedReadFromDisk: wrong universe: %d",
+			    "ThreadedReadFromDisk: invalid header version: 0x%x" }, false, false, true },
 			// CJobMgr::BRouteMsgToJob carries two VPROF scopes, one per routing path.
 			{ "CJobMgr::BRouteMsgToJob", "", Follow::StringXref, {},
 			  "", "", -1, {}, {}, false, {},
@@ -204,7 +309,7 @@ namespace PatternsX64
 	{
 		for (const auto& locator : locators())
 		{
-			if (locator.name == name)
+			if (locator.name == name && locator.bindAtRuntime)
 				return &locator;
 		}
 		return nullptr;

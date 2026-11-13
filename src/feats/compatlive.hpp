@@ -51,6 +51,26 @@ inline std::optional<std::size_t> decodeManagerOffset(
 	return static_cast<std::size_t>(offset);
 }
 
+// x86_64: `lea r64,[rbx+disp32]` = REX.W 8D /r with mod=10 (no SIB).  The destination
+// register is not part of the contract; the CUser constructor passes the manager in rdi.
+inline std::optional<std::size_t> decodeManagerOffset64(
+	std::span<const std::uint8_t> instruction) noexcept
+{
+	if (instruction.size() < 7 || instruction[0] != 0x48 || instruction[1] != 0x8d ||
+		(instruction[2] & 0xc0) != 0x80 || (instruction[2] & 0x07) == 0x04)
+	{
+		return std::nullopt;
+	}
+	const std::uint32_t offset =
+		static_cast<std::uint32_t>(instruction[3]) |
+		(static_cast<std::uint32_t>(instruction[4]) << 8) |
+		(static_cast<std::uint32_t>(instruction[5]) << 16) |
+		(static_cast<std::uint32_t>(instruction[6]) << 24);
+	if (offset == 0 || offset > kMaxManagerOffset)
+		return std::nullopt;
+	return static_cast<std::size_t>(offset);
+}
+
 inline StepResult step(
 	IClientCompat* compat,
 	std::uint32_t appId,
