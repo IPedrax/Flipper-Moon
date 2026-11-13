@@ -100,6 +100,20 @@ upstream 32-bit build, use the upstream repository, or run the installer with
 Build: [`docs/BUILDING.md`](docs/BUILDING.md). Upstream history is kept; the 32-bit code
 is still in the tree and will be removed in a separate change.
 
+## Releases
+
+Every push to `main` that changes code is built, tested and released by
+[GitHub Actions](.github/workflows/release.yml). The release is published only if all of
+these pass: the portable build on Ubuntu 22.04, the check that the binaries are 64-bit and
+need glibc 2.34 at most, the `test-ci` unit tests (`make -k test-ci`), the installer and
+auto-fix tests, and a check of the archive. The version is the UTC build time
+(`v<YYYYMMDDHHMMSS>`) and the tag points at the tested commit. Pull requests run the same
+build and tests without releasing. Pushes that only change documentation do not release.
+
+The pipeline cannot run Steam: the offline locator audit (`make test-patterns-x86_64`) and
+the load test need a real `steamrt64` client on disk, so run them yourself on a machine with
+Steam before relying on a change that touches hooks or locators.
+
 ## Credits
 
 Upstream:

@@ -1,0 +1,125 @@
+# Builds, tests and releases the x86_64 library.
+#
+# Pull requests and pushes run the same build and tests. Only a push to main whose build
+# and tests all passed publishes a release (version = UTC build timestamp, tag v<version>),
+# so a broken commit never reaches users who update from the releases. Docs-only pushes
+# do not release: a new release makes every installed Lumen report an update.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'docs/**', '.mailmap']
+  pull_request:
+    paths-ignore: ['**/*.md', 'docs/**', '.mailmap']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The version lives in the build only: the repository files are never rewritten by CI,
+      # so a release cannot trigger itself.
+      - name: Version
+        id: ver
+        run: |
+          v="$(date -u +%Y%m%d%H%M%S)"
+          printf '%s\n' "$v" > res/version.txt
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libssl-dev pkg-config unzip zip python3
+
+      # Same path as a local release: Ubuntu 22.04 container, glibc 2.34 floor.
+      - name: Portable build
+        run: scripts/build.sh --portable
+
+      - name: Binaries are 64-bit and need glibc 2.34 at most
+        run: |
+          set -eu
+          for f in bin/SLSsteam.so bin/library-inject.so bin/pattern-refresh; do
+            file "$f" | grep -q 'ELF 64-bit' || { echo "$f is not a 64-bit ELF"; exit 1; }
+            max="$(objdump -T "$f" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1)"
+            echo "$f needs ${max:-no versioned glibc symbol}"
+            [ -z "$max" ] || [ "$(printf '%s\nGLIBC_2.34\n' "$max" | sort -V | tail -1)" = GLIBC_2.34 ] \
+              || { echo "$f needs $max, above GLIBC_2.34"; exit 1; }
+          done
+          scripts/check-sls-abi.sh bin/SLSsteam.so
+
+      # make -k: report every failing test, not only the first one.
+      - name: Tests
+        run: |
+          make -k test-ci
+          bash scripts/test-autofix-release.sh
+          bash -n install-x86_64.sh autofix.sh setup.sh
+
+      - name: Package
+        run: scripts/package.sh
+
+      - name: Check the archive
+        run: |
+          set -eu
+          v="${{ steps.ver.outputs.version }}"
+          zip="dist/slsteam-moon-linux-$v-x86_64.zip"
+          [ -f "$zip" ] || { echo "missing $zip"; ls dist; exit 1; }
+          (cd dist && sha256sum -c "slsteam-moon-linux-$v-x86_64.zip.sha256")
+          list="$(unzip -Z1 "$zip")"
+          for need in setup.sh bin/SLSsteam.so bin/library-inject.so bin/pattern-refresh res/config.yaml; do
+            printf '%s\n' "$list" | grep -qE "(^|/)$need\$" || { echo "archive lacks $need"; exit 1; }
+          done
+
+      - name: Release files
+        run: |
+          mkdir release
+          cp dist/slsteam-moon-linux-*-x86_64.zip dist/slsteam-moon-linux-*-x86_64.zip.sha256 release/
+          cp install-x86_64.sh autofix.sh release/
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: release
+
+      # The tag points at the commit that was built and tested.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          gh release create "v$VERSION" release/* \
+            --target "$GITHUB_SHA" \
+            --title "x86_64 $VERSION" \
+            --generate-notes \
+            --notes "Built and tested by CI from commit $GITHUB_SHA. Install and requirements: see the README. Not covered by CI: a real Steam client (the offline locator audit and the load test need steamrt64 on disk)."
