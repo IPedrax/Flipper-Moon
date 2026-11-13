@@ -1,16 +1,32 @@
-# slsteam-moon
+# slsteam-moon-x64
 
-A fork of [SLSsteam](https://github.com/AceSLS/SLSsteam) with extra
-protocol handlers, SteamStub support, and a Lua manifest importer.
+64-bit-only continuation of [swwayps/slsteam-moon](https://github.com/swwayps/slsteam-moon),
+itself a fork of [SLSsteam](https://github.com/AceSLS/SLSsteam). It targets the 64-bit
+Steam client (steamrt64), now the default on Linux. The 32-bit client is not supported
+here; for it, use the upstream repository.
 
-For the recommended installation method, see
-[swwayps/luatools-moon](https://github.com/swwayps/luatools-moon).
-For building, see [`docs/BUILDING.md`](docs/BUILDING.md).
+Ported to x86_64 and proven on a real client: manifest binding, live add/remove
+of a game, package patching, the LuaTools/Lumen buttons, the achievements panel for
+added games, and downloading a non-owned title. Hooks installed but not yet exercised:
+reconcile pin, depot quarantine, parental restrictions and the stats redirect. Details
+and the full status table: [`docs/X86_64.md`](docs/X86_64.md).
+
+Install (builds a 64-bit library, then runs the stock luatools-moon installer with
+the pieces that cannot work on a 64-bit client replaced):
+
+```sh
+./install-x86_64.sh --slsteam-zip slsteam-moon-linux-<version>-x86_64.zip
+```
+
+Build: [`docs/BUILDING.md`](docs/BUILDING.md). Upstream history is kept; the 32-bit code
+is still in the tree and will be removed in a separate change.
 
 ## Credits
 
 Upstream:
 
+- [swwayps](https://github.com/swwayps) and contributors, slsteam-moon: the
+  protocol handlers, SteamStub support and Lua manifest importer this port is built on.
 - [AceSLS](https://github.com/AceSLS) and contributors —
   the hook framework, protobuf plumbing, ownership patches,
   family-share bypass, and the broader feature set this branch
@@ -30,4 +46,4 @@ Reference material:
 
 ## Support
 
-Open an issue: https://github.com/swwayps/slsteam-moon/issues
+Open an issue: https://github.com/ogb4n/slsteam-moon-x64/issues

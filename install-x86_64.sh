@@ -144,6 +144,8 @@ define_overrides() {
 		else
 			log_info "$(L "Resolving the latest slsteam-moon x86_64 release" \
 			             "Buscando a última release x86_64 do slsteam-moon")"
+			# The x86_64 releases live in this repository, not in the stock installer's i386 one.
+			SLS_REPO="${SLSM_X64_REPO:-ogb4n/slsteam-moon-x64}"
 			resolve_component_asset stable "$SLS_REPO" "" "$SLSM_X64_ASSET_GLOB" any "" || rc=$?
 			if [ "$rc" -eq 2 ]; then fail "$(forge_unreachable_msg)"; fi
 			if [ "$rc" -ne 0 ]; then
