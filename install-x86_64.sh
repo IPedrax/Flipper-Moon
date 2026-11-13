@@ -20,7 +20,8 @@
 #  Lumen and the LuaTools menu ship with swwayps/* repositories hard-coded for the
 #  update check, the "Update All" button and the auto-fix offer. After Lumen is
 #  installed, those few strings are repointed to this repository (repoint_lumen), so
-#  an update installs this build instead of the 32-bit one. If Lumen's files no longer
+#  an update installs this build instead of the 32-bit one. Both scripts are pointed at
+#  the release assets (releases/latest/download), which only change after the CI passed. If Lumen's files no longer
 #  contain the expected strings, the installer says so and exits non-zero.
 #
 #  The stock installer is sourced, not forked: it ends with
@@ -138,19 +139,30 @@ load_stock_installer() {
 # ---------------------------------------------------------------------------
 repoint_lumen() {
 	local dir="${1:-${LUMEN_DIR:-$HOME/.local/share/Lumen}}"
+	# Release assets, not the main branch: they only change after the CI passed.
+	local dl="https://github.com/$SLSM_X64_REPO/releases/latest/download"
 	local raw="https://raw.githubusercontent.com/$SLSM_X64_REPO/main"
 	local up_install="https://raw.githubusercontent.com/swwayps/luatools-moon/main/install.sh"
 	local up_autofix="https://raw.githubusercontent.com/swwayps/slsteam-moon/slsteam-moon/autofix.sh"
-	local -a files=() from=() to=()
+	local -a files=() from=() to=() opt=()
 	shopt -u patsub_replacement 2>/dev/null || true
+	add() { files+=("$1"); from+=("$2"); to+=("$3"); opt+=("${4:-0}"); }
 
-	files+=(lua/about.lua); from+=('repo = "swwayps/slsteam-moon",'); to+=("repo = \"$SLSM_X64_REPO\",")
-	files+=(lua/about.lua); from+=('mirror_key = "slsteam-moon",'); to+=('mirror_key = "slsteam-moon-x64",')
-	files+=(lua/about.lua); from+=('asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$",'); to+=('asset_pat = "^slsteam%-moon%-linux%-.*%-x86_64%.zip$",')
-	files+=(lua/about.lua); from+=("$up_install"); to+=("$raw/install-x86_64.sh")
-	files+=(lua/slscheck.lua); from+=("$up_autofix"); to+=("$raw/autofix.sh")
-	files+=(lua/menu/02-i18n.js); from+=("$up_install"); to+=("$raw/install-x86_64.sh")
-	files+=(lua/menu/02-i18n.js); from+=("$up_autofix"); to+=("$raw/autofix.sh")
+	# First, Lumens repointed by an earlier version of this installer still serve both
+	# scripts from the main branch: migrate them. Optional, so a fresh Lumen is not an error;
+	# done before the upstream pairs so those see their replacement already in place.
+	add lua/about.lua        "$raw/install-x86_64.sh" "$dl/install-x86_64.sh" 1
+	add lua/menu/02-i18n.js  "$raw/install-x86_64.sh" "$dl/install-x86_64.sh" 1
+	add lua/slscheck.lua     "$raw/autofix.sh"        "$dl/autofix.sh"        1
+	add lua/menu/02-i18n.js  "$raw/autofix.sh"        "$dl/autofix.sh"        1
+
+	add lua/about.lua "repo = \"swwayps/slsteam-moon\"," "repo = \"$SLSM_X64_REPO\","
+	add lua/about.lua 'mirror_key = "slsteam-moon",' 'mirror_key = "slsteam-moon-x64",'
+	add lua/about.lua 'asset_pat = "^slsteam%-moon%-linux%-.*%-lumen%.zip$",' 'asset_pat = "^slsteam%-moon%-linux%-.*%-x86_64%.zip$",'
+	add lua/about.lua "$up_install" "$dl/install-x86_64.sh"
+	add lua/slscheck.lua "$up_autofix" "$dl/autofix.sh"
+	add lua/menu/02-i18n.js "$up_install" "$dl/install-x86_64.sh"
+	add lua/menu/02-i18n.js "$up_autofix" "$dl/autofix.sh"
 
 	local i f c rc=0
 	for i in "${!files[@]}"; do
@@ -161,7 +173,7 @@ repoint_lumen() {
 		c="$(cat -- "$f"; printf x)"; c="${c%x}"
 		if [[ "$c" == *"${from[$i]}"* ]]; then
 			printf '%s' "${c//"${from[$i]}"/${to[$i]}}" > "$f" || { rc=1; continue; }
-		elif [[ "$c" != *"${to[$i]}"* ]]; then
+		elif [ "${opt[$i]}" = 0 ] && [[ "$c" != *"${to[$i]}"* ]]; then
 			log_warn "repoint_lumen: expected text not found in ${files[$i]}: ${from[$i]}"; rc=1
 		fi
 	done

@@ -105,7 +105,16 @@ grep -q 'repo = "ogb4n/slsteam-moon-x64",' "$T/lumen/lua/about.lua" && ok "updat
 grep -q 'mirror_key = "slsteam-moon-x64",' "$T/lumen/lua/about.lua" && ok "upstream mirror key replaced" || ko "mirror key kept"
 grep -qF '%-x86_64%.zip$' "$T/lumen/lua/about.lua" && ok "asset pattern matches the x86_64 zip" || ko "asset pattern kept"
 grep -q 'repo = "swwayps/luatools-moon",' "$T/lumen/lua/about.lua" && ok "LuaTools plugin repository is left alone" || ko "plugin repository touched"
-grep -q 'ogb4n/slsteam-moon-x64/main/install-x86_64.sh | bash' "$T/lumen/lua/menu/02-i18n.js" && ok "terminal hint shows this installer" || ko "terminal hint not repointed"
+grep -q 'ogb4n/slsteam-moon-x64/releases/latest/download/install-x86_64.sh | bash' "$T/lumen/lua/menu/02-i18n.js" && ok "terminal hint shows the release-asset installer" || ko "terminal hint not repointed"
+grep -q 'releases/latest/download/autofix.sh' "$T/lumen/lua/slscheck.lua" && ok "auto-fix URL is the release asset" || ko "autofix URL not repointed"
+grep -rq 'raw.githubusercontent.com/ogb4n' "$T/lumen" && ko "a main-branch URL is left" || ok "no main-branch script URL left"
+# A Lumen repointed by the previous version of this installer serves both scripts from main.
+sed -i 's|https://github.com/ogb4n/slsteam-moon-x64/releases/latest/download/install-x86_64.sh|https://raw.githubusercontent.com/ogb4n/slsteam-moon-x64/main/install-x86_64.sh|g; s|https://github.com/ogb4n/slsteam-moon-x64/releases/latest/download/autofix.sh|https://raw.githubusercontent.com/ogb4n/slsteam-moon-x64/main/autofix.sh|g' \
+	"$T/lumen/lua/about.lua" "$T/lumen/lua/slscheck.lua" "$T/lumen/lua/menu/02-i18n.js"
+grep -rq 'raw.githubusercontent.com/ogb4n' "$T/lumen" || ko "migration fixture was not built"
+out="$(repoint)"
+echo "$out" | grep -q 'rc=0' && ! grep -rq 'raw.githubusercontent.com/ogb4n' "$T/lumen" \
+	&& grep -q 'releases/latest/download/install-x86_64.sh' "$T/lumen/lua/about.lua" && ok "a Lumen repointed to main is migrated to the release assets" || ko "migration failed: $out"
 cp -r "$T/lumen" "$T/lumen.once"; out="$(repoint)"
 echo "$out" | grep -q 'rc=0' && diff -r "$T/lumen" "$T/lumen.once" >/dev/null && ok "repoint_lumen is idempotent" || ko "second run changed something or failed"
 rm "$T/lumen/lua/slscheck.lua"; out="$(repoint)"

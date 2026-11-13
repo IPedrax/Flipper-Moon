@@ -119,7 +119,22 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           gh release create "v$VERSION" release/* \
+            --draft \
             --target "$GITHUB_SHA" \
             --title "x86_64 $VERSION" \
             --generate-notes \
             --notes "Built and tested by CI from commit $GITHUB_SHA. Install and requirements: see the README. Not covered by CI: a real Steam client (the offline locator audit and the load test need steamrt64 on disk)."
+          # Published only once every asset is uploaded: "latest" never points at a
+          # release whose scripts are missing.
+          gh release edit "v$VERSION" --draft=false --latest
+
+      - name: The public URLs answer
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          for f in install-x86_64.sh autofix.sh; do
+            curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/$f" \
+              "https://github.com/$GH_REPO/releases/latest/download/$f"
+            cmp "/tmp/$f" "release/$f"
+          done

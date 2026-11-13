@@ -48,10 +48,11 @@ that never had slsteam-moon.
 **2. Install, in one command:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ogb4n/slsteam-moon-x64/main/install-x86_64.sh | bash
+curl -fsSL https://github.com/ogb4n/slsteam-moon-x64/releases/latest/download/install-x86_64.sh | bash
 ```
 
-It downloads the latest x86_64 release of this repository, then runs the upstream
+The script is a release asset, so it only changes after the CI has passed. It downloads
+the latest x86_64 release of this repository, then runs the upstream
 luatools-moon installer with the 64-bit pieces swapped in (Lumen and the LuaTools plugin
 come from their upstream repositories). CloudRedirect is skipped because its hook is a
 32-bit library: Steam Cloud is disabled for added games (`DisableCloud: yes`).
