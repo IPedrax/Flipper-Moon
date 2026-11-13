@@ -13,6 +13,26 @@ class IClientUtils;
 class IProcessPipe { };
 using CUtlString = char*;
 
+#if defined(__x86_64__)
+// Linux x86_64 (steamrt64) layout, taken from AceSLS/SLSsteam. Only the head
+// of the structure is verified there, so the i386 tail fields (userHandle,
+// callback queue, debugText) are deliberately absent until re-verified.
+class __attribute__((packed)) __attribute__((aligned(1))) CServerPipe
+{
+public:
+	IProcessPipe* internalPipe;			//0x0
+	IProcessPipe* singleProcessPipe;	//0x8
+	HSteamPipe pipeHandle;				//0x10
+	uint8_t __pad0x14[0xC];				//0x14
+	int32_t pid;						//0x20
+	int32_t threadId;					//0x24
+	CUtlString processName;				//0x28
+};
+
+static_assert(offsetof(CServerPipe, pipeHandle) == 0x10);
+static_assert(offsetof(CServerPipe, pid) == 0x20);
+static_assert(offsetof(CServerPipe, threadId) == 0x24);
+#else
 class __attribute__((packed)) __attribute__((aligned(1))) CServerPipe
 {
 public:
@@ -35,6 +55,7 @@ public:
 
 static_assert(offsetof(CServerPipe, pipeHandle) == 0x8);
 static_assert(offsetof(CServerPipe, pid) == 0x14);
+#endif
 
 class CSteamEngine
 {

@@ -10,7 +10,9 @@
 HSteamPipe IClientUtils::getCurrentSteamPipe()
 {
 	//Offset found in IClientUtils::GetAppId
-	const static auto offset = *reinterpret_cast<lm_address_t*>(Patterns::IClientUtils::Offset_GetPipeIndex.address + 0x2);
+	// `mov esi,[rdi+disp32]` / `mov edx,[ecx+disp32]`: a 4-byte displacement, not a
+	// pointer-sized one.
+	const static auto offset = *reinterpret_cast<int32_t*>(Patterns::IClientUtils::Offset_GetPipeIndex.address + 0x2);
 	return *reinterpret_cast<HSteamPipe*>(this + offset);
 }
 

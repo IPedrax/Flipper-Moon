@@ -29,6 +29,11 @@ enum class EPackageStatus : uint32_t
 enum class EBillingType : uint32_t {};
 enum class ELicenseType : uint32_t {};
 
+#if defined(__x86_64__)
+// Layout not yet verified against the steamrt64 client; see PLAN.md phase 4.
+// Only the forward declaration is usable on x86_64.
+struct PackageInfo;
+#else
 static_assert(sizeof(CUtlMemory<uint32_t>) == 12, "CUtlMemory layout drift");
 
 static_assert(sizeof(CUtlVector<uint32_t>) == 16, "CUtlVector layout drift");
@@ -52,3 +57,4 @@ static_assert(offsetof(PackageInfo, Status)     == 0x18, "PackageInfo::Status dr
 static_assert(offsetof(PackageInfo, SHA_1_Hash) == 0x1C, "PackageInfo::SHA_1_Hash drift");
 static_assert(offsetof(PackageInfo, AppIdVec)   == 0x38, "PackageInfo::AppIdVec drift");
 static_assert(offsetof(PackageInfo, DepotIdVec) == 0x48, "PackageInfo::DepotIdVec drift");
+#endif

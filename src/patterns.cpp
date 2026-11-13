@@ -1,5 +1,10 @@
 #include "patterns.hpp"
 
+#if defined(__x86_64__)
+#include "patterns_x86_64.hpp"
+#include "rtti_vtable.hpp"
+#endif
+
 #include "globals.hpp"
 #include "memhlp.hpp"
 #include "feats/ipcframe.hpp"
@@ -76,7 +81,13 @@ namespace
 		const PatternCache::ModuleIdentity& identity
 	)
 	{
+#if defined(__x86_64__)
+		// Explicit architecture in the key on top of the build id: an i386
+		// cache must never be read for a 64-bit module or the reverse.
+		const std::string key = "x86_64-" + identity.gnuBuildId + "-"
+#else
 		const std::string key = identity.gnuBuildId + "-"
+#endif
 			+ std::to_string(identity.size) + "-"
 			+ std::to_string(identity.mtimeSeconds) + "-"
 			+ std::to_string(identity.mtimeNanoseconds) + ".cache";
@@ -574,11 +585,87 @@ Pattern_t::Pattern_t(const char* name, const char* pattern,
 	Patterns::patterns().emplace_back(this);
 }
 
+#if defined(__x86_64__)
+// Build a read-only view of the loaded module and resolve the vtable slot.
+static lm_address_t resolveVtableLocator(const Pattern_t& pattern, const lm_module_t& module)
+{
+	struct Context
+	{
+		RttiVtable::Image image;
+		lm_address_t begin;
+		lm_address_t end;
+	} context;
+	context.begin = module.base;
+	context.end = module.base + module.size;
+
+	LM_EnumSegments([](lm_segment_t* segment, lm_void_t* argument) -> lm_bool_t
+	{
+		auto* ctx = static_cast<Context*>(argument);
+		if ((segment->prot & LM_PROT_R) == 0 || segment->base < ctx->begin || segment->base >= ctx->end)
+			return LM_TRUE;
+		RttiVtable::Segment entry;
+		entry.va = segment->base;
+		entry.data = reinterpret_cast<const std::uint8_t*>(segment->base);
+		entry.size = segment->size;
+		entry.executable = (segment->prot & LM_PROT_X) != 0;
+		ctx->image.segments.push_back(entry);
+		return LM_TRUE;
+	}, &context);
+
+	context.image.base = module.base;
+	// la_objopen announces a module before it is relocated: read the pointers as
+	// they will be once the loader is done (see relativeRelocationsFromDynamic).
+	const auto relocations = RttiVtable::relativeRelocationsFromDynamic(context.image);
+	context.image.relocations = &relocations;
+
+	if (!pattern.xrefStrings.empty())
+	{
+		std::vector<std::string_view> texts(pattern.xrefStrings.begin(), pattern.xrefStrings.end());
+		const auto function = RttiVtable::functionReferencingAll(context.image, texts, pattern.preferMostCalled);
+		if (!function)
+		{
+			g_pLog->warn("String locator '%s' did not resolve to exactly one function\n", pattern.name.c_str());
+			return LM_ADDRESS_BAD;
+		}
+		return static_cast<lm_address_t>(*function);
+	}
+
+	const auto slot = RttiVtable::slotFunction(
+		context.image, pattern.rttiClass, pattern.rttiBase,
+		static_cast<unsigned>(pattern.vtableSlot));
+	if (!slot)
+	{
+		g_pLog->warn("RTTI locator '%s' (%s slot %d) did not resolve uniquely\n",
+		             pattern.name.c_str(), pattern.rttiClass.c_str(), pattern.vtableSlot);
+		return LM_ADDRESS_BAD;
+	}
+	return static_cast<lm_address_t>(RttiVtable::followAdjustorThunk(context.image, *slot));
+}
+#endif
+
 bool Pattern_t::find()
 {
 	lm_module_t& targetModule = module ? *module : g_modSteamClient;
 	matchAddress = LM_ADDRESS_BAD;
 	lm_address_t cachedMatch = LM_ADDRESS_BAD;
+#if defined(__x86_64__)
+	// No x86_64 definition: never fall back to the i386 bytes.
+	if (pattern.empty() && vtableSlot < 0 && xrefStrings.empty())
+	{
+		address = LM_ADDRESS_BAD;
+		return false;
+	}
+#endif
+#if defined(__x86_64__)
+	if (vtableSlot >= 0 || !xrefStrings.empty())
+	{
+		// RTTI and string locators carry no signature, so neither the signed
+		// catalog nor the local cache can vouch for them; they are re-derived
+		// from the module.
+		address = resolveVtableLocator(*this, targetModule);
+	}
+	else
+#endif
 	if (const auto trusted = catalogAddress(*this, true, &cachedMatch))
 	{
 		address = *trusted;
@@ -667,6 +754,19 @@ bool Pattern_t::find()
 // feats/ipcframe.hpp (host-unit-tested); this only walks live memory.
 static void autoResolveIpcFrameRoots()
 {
+#if defined(__x86_64__)
+	// IClientUtils shares the dispatch-tree shape on x86_64 only.
+	const std::array<Pattern_t*, 7> targets =
+	{
+		&Patterns::IClientApps::RunIPCFrame,
+		&Patterns::IClientAppManager::RunIPCFrame,
+		&Patterns::IClientRemoteStorage::RunIPCFrame,
+		&Patterns::IClientUGC::RunIPCFrame,
+		&Patterns::IClientUserStats::RunIPCFrame,
+		&Patterns::IClientUser::RunIPCFrame,
+		&Patterns::IClientUtils::RunIPCFrame,
+	};
+#else
 	const std::array<Pattern_t*, 6> targets =
 	{
 		&Patterns::IClientApps::RunIPCFrame,
@@ -676,6 +776,7 @@ static void autoResolveIpcFrameRoots()
 		&Patterns::IClientUserStats::RunIPCFrame,
 		&Patterns::IClientUser::RunIPCFrame,
 	};
+#endif
 	std::array<bool, targets.size()> catalogResolved {};
 	for (size_t i = 0; i < targets.size(); ++i)
 		catalogResolved[i] = catalogAddress(*targets[i], false).has_value();
@@ -805,6 +906,70 @@ static void autoResolveIpcFrameRoots()
 }
 
 
+#if defined(__x86_64__)
+// Swap in the x86_64 definition of every locator that has one and blank the
+// rest.  A blanked locator resolves to nothing: required ones fail the load,
+// optional ones disable their feature, and none can match i386 bytes.
+static void bindX86_64Locators()
+{
+	// Not needed on x86_64: the engine pointer comes from ProcessIPCFrame and the
+	// embedded IClientUtils from RTTI; LoadPackage and Grow only feed PackagePatch,
+	// which is stubbed until its PackageInfo layout is verified (PLAN.md, phase 4).
+	Patterns::CSteamEngine::Init.optional = true;
+	Patterns::CSteamEngine::Offset_ClientUtils.optional = true;
+	Patterns::CPackageInfoCache::LoadPackage.optional = true;
+	Patterns::CUtlMemory::Grow.optional = true; // only PackagePatch calls it
+
+	std::string missing;
+	std::size_t bound = 0;
+	std::size_t unported = 0;
+	for (Pattern_t* p : Patterns::patterns())
+	{
+		const PatternsX64::Locator* locator = PatternsX64::find(p->name);
+		if (locator == nullptr)
+		{
+			p->pattern.clear();
+			p->prologue.clear();
+			p->vtableSlot = -1;
+			p->xrefStrings.clear();
+			p->followMode = MemHlp::SigFollowMode::None;
+			++unported;
+			if (!p->optional)
+			{
+				if (!missing.empty())
+					missing += ", ";
+				missing += p->name;
+			}
+			continue;
+		}
+
+		p->pattern = std::string(locator->pattern);
+		p->prologue = locator->prologue;
+		p->rttiClass = std::string(locator->rttiClass);
+		p->rttiBase = std::string(locator->rttiBase);
+		p->vtableSlot = locator->follow == PatternsX64::Follow::VtableSlot ? locator->slot : -1;
+		p->xrefStrings.assign(locator->xrefStrings.begin(), locator->xrefStrings.end());
+		p->preferMostCalled = locator->preferMostCalled;
+		switch (locator->follow)
+		{
+			case PatternsX64::Follow::Relative:
+				p->followMode = MemHlp::SigFollowMode::Relative;
+				break;
+			case PatternsX64::Follow::PrologueUpwards:
+				p->followMode = MemHlp::SigFollowMode::PrologueUpwards;
+				break;
+			default:
+				p->followMode = MemHlp::SigFollowMode::None;
+				break;
+		}
+		++bound;
+	}
+	g_pLog->info("x86_64 locators: %zu bound, %zu without an x86_64 definition\n", bound, unported);
+	if (!missing.empty())
+		g_pLog->warn("x86_64: required locators not ported yet: %s\n", missing.c_str());
+}
+#endif
+
 bool Patterns::init()
 {
 	bool found = true;
@@ -846,6 +1011,10 @@ bool Patterns::init()
 	SteamUI::MarkAppChange.optional = true;
 	SteamUI::BuildCompleteAppOverviewChange.optional = true;
 	SteamUI::OwnershipFlagsReference.optional = true;
+
+#if defined(__x86_64__)
+	bindX86_64Locators();
+#endif
 
 	loadActiveCatalogs();
 

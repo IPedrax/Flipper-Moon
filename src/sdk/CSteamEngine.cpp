@@ -33,7 +33,12 @@ CServerPipe* CSteamEngine::getServerPipe(const HSteamPipe pipe)
 
 CUser* CSteamEngine::getUser(uint32_t index)
 {
+	#if defined(__x86_64__)
+	// `add r12,[rbp+disp32]`: the displacement starts at +3 and is 4 bytes wide.
+	const static auto offset = *reinterpret_cast<int32_t*>(Patterns::CSteamEngine::Offset_User.address + 0x3);
+#else
 	const static auto offset = *reinterpret_cast<lm_address_t*>(Patterns::CSteamEngine::Offset_User.address + 0x2);
+#endif
 	const auto vec = reinterpret_cast<const CUtlVector<CUser*>*>(this + offset);
 	if (!vec->memory.base || index >= vec->size)
 	{
@@ -49,8 +54,20 @@ IClientUtils* CSteamEngine::getUtils()
 	{
 		return nullptr;
 	}
+#if defined(__x86_64__)
+	// No byte locator.  IClientUtils is a secondary base of CSteamEngine (+0x1118 in the
+	// audited client): its vptr points into the CSteamEngine vtable group, so the member
+	// is the first word past the object's own vptr whose RTTI says "12CSteamEngine".
+	// (Searching for "12IClientUtils" finds nothing: no vtable carries that typeinfo.)
+	const static lm_address_t offset = MemHlp::searchOffsetByTypeName(this, "12CSteamEngine");
+	if (offset == LM_ADDRESS_BAD)
+	{
+		return nullptr;
+	}
+#else
 	const static lm_address_t offset = *reinterpret_cast<lm_address_t*>(Patterns::CSteamEngine::Offset_ClientUtils.address + 2);
-	return reinterpret_cast<IClientUtils*>(this + offset);
+#endif
+	return reinterpret_cast<IClientUtils*>(reinterpret_cast<uint8_t*>(this) + offset);
 }
 
 void CSteamEngine::setAppIdForCurrentPipe(uint32_t appId)

@@ -1,6 +1,8 @@
 
 #include "manifestcode.hpp"
 
+#include "../addr_plausible.hpp"
+
 #include "depotkey.hpp"
 #include "manifestid.hpp"
 #include "manifeststore.hpp"
@@ -650,7 +652,7 @@ void* hkRecvPkt(void* pManager, CRemoteClientPacket* pPacket)
 	// the original receive path, never feed a wild pointer/length to decodeFrame.
 	const auto rcpDataAddr = pPacket
 	    ? reinterpret_cast<uintptr_t>(pPacket->m_pubData) : 0u;
-	if (pPacket && rcpDataAddr >= 0x10000u && rcpDataAddr < 0xFFFFF000u
+	if (pPacket && Addr::plausibleUserPointer(rcpDataAddr)
 	    && pPacket->m_cubData && pPacket->m_cubData <= (64u * 1024 * 1024))
 	{
 		std::lock_guard<std::mutex> lock(g_RxLock);
@@ -680,7 +682,13 @@ void* hkRecvPkt(void* pManager, CRemoteClientPacket* pPacket)
 }
 
 
+#if defined(__x86_64__)
+#define SLS_ROUTE_EXTRA , arg5
+bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob, int32_t arg5)
+#else
+#define SLS_ROUTE_EXTRA
 bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
+#endif
 {
 	// Reject not just null but any implausible pointer before dereferencing.
 	// A Steam client ABI change can shift the message/job structs these offsets
@@ -690,8 +698,7 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 	// implausible pointer as "no data" so this hook falls through to the
 	// original routing unchanged.
 	auto plausible = [](const void* p) -> bool {
-		const auto a = reinterpret_cast<uintptr_t>(p);
-		return a >= 0x10000u && a < 0xFFFFF000u;
+		return Addr::plausibleUserPointer(p);
 	};
 	auto peek32 = [&](const void* p, int off) -> uint32_t {
 		if (!plausible(p)) return 0;
@@ -707,12 +714,23 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 	const uint32_t eMsg = peek32(pJob, 0x10);
 	if (eMsg != 0x93 /* k_EMsgServiceMethodResponse */)
 	{
-		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob);
+		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
 	}
 
+#if defined(__x86_64__)
+	// pMsg is the packet wrapper {vptr, refcount, flag, CRemoteClientPacket* at +0x10};
+	// the inner packet carries the frame at +0x10 / +0x18 (see CRemoteClientPacket).
+	// Pointer reads must keep their full width.
+	const auto* pInner = plausible(pMsg)
+	    ? *reinterpret_cast<const CRemoteClientPacket* const*>(static_cast<const uint8_t*>(pMsg) + 0x10)
+	    : nullptr;
+	const uint8_t* pBuf = plausible(pInner) ? pInner->m_pubData : nullptr;
+	const uint32_t cbBuf = plausible(pInner) ? pInner->m_cubData : 0;
+#else
 	auto* pInner = reinterpret_cast<uint8_t*>(peek32(pMsg, 0xc));
 	auto* pBuf   = reinterpret_cast<uint8_t*>(peek32(pInner, 0x4));
 	const uint32_t cbBuf = peek32(pInner, 0x8);
+#endif
 	const uint64_t jobIdTarget = peek64(pJob, 0x8);
 
 	// pBuf is a value read out of the (client-owned) inner struct, then used as
@@ -723,14 +741,14 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 	// routing on a layout we no longer parse, instead of crashing.
 	if (!plausible(pBuf) || cbBuf < sizeof(MsgHdr) + 1 || cbBuf > (64u * 1024 * 1024))
 	{
-		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob);
+		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
 	}
 
 	const auto* hdrPtr = reinterpret_cast<const MsgHdr*>(pBuf);
 	const uint32_t cbProtoHdr = hdrPtr->headerLength;
 	if (cbProtoHdr == 0 || sizeof(MsgHdr) + cbProtoHdr > cbBuf)
 	{
-		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob);
+		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
 	}
 
 	CMsgProtoBufHeader hdr;
@@ -739,12 +757,12 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 		g_pLog->debug("BRouteMsgToJob service method response: %s\n", hdr.target_job_name().c_str());
 		if (fnvHash(hdr.target_job_name().c_str()) != kHashGetManifestRequestCode)
 		{
-			return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob);
+			return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
 		}
 	}
 	else
 	{
-		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob);
+		return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
 	}
 
 	const uint32_t bodyOffset = sizeof(MsgHdr) + cbProtoHdr;
@@ -753,8 +771,9 @@ bool hkBRouteMsgToJob(void* pJobMgr, void* arg2, void* pMsg, void* pJob)
 	// response — manifests are staged from the archive — so the message routes
 	// through unchanged.
 	resolveDonorResponse(jobIdTarget, hdr, pBuf + bodyOffset, cbBuf - bodyOffset);
-	return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob);
+	return Hooks::CJobMgr_BRouteMsgToJob.tramp.fn(pJobMgr, arg2, pMsg, pJob SLS_ROUTE_EXTRA);
 }
+#undef SLS_ROUTE_EXTRA
 
 bool hkCDepotDownloadMgr_BYldRequestDepotManifest(void* pthis, uint32_t appId, uint32_t depotId, uint64_t manifestId, const char* branch, void* arg20)
 {

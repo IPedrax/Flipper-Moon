@@ -17,8 +17,31 @@ CXX := g++
 .DEFAULT_GOAL := all
 STEAMCLIENT ?= $(HOME)/.local/share/Steam/ubuntu12_32/steamclient.so
 STEAMUI ?= $(HOME)/.local/share/Steam/ubuntu12_32/steamui.so
+# steamrt64/ holds the client the 64-bit Steam process loads (sha256 53bdabbb... on 2026-11-11); linux64/steamclient.so is a different binary.
+STEAMCLIENT64 ?= $(HOME)/.local/share/Steam/steamrt64/steamclient.so
+STEAMUI64 ?= $(HOME)/.local/share/Steam/steamrt64/steamui.so
 
-libs := $(wildcard lib/*.a)
+# Architecture of the build. SLSsteam.so is loaded into the Steam client
+# process, so it must match that process' ELF class: x86_64 for the current
+# steamrt64 client, i386 only for the legacy 32-bit client (ARCH=i386).
+ARCH ?= $(shell uname -m)
+ifneq (,$(filter i386 i686,$(ARCH)))
+	ARCH := i386
+endif
+ifeq ($(ARCH),i386)
+	MARCH := -m32
+	ARCHDEF := -DI386
+else ifeq ($(ARCH),x86_64)
+	MARCH :=
+	ARCHDEF := -DX86_64  # informational; sources test the compiler macro __x86_64__
+else
+	$(error unsupported ARCH '$(ARCH)': expected x86_64 or i386)
+endif
+
+libdir := lib/$(ARCH)
+libs := $(wildcard $(libdir)/*.a)
+# i386 ships the lite runtime, x86_64 the full one (same protobuf 3.15.3).
+LIBPROTOBUF := $(firstword $(wildcard $(libdir)/libprotobuf-lite.a $(libdir)/libprotobuf.a))
 srcs := $(shell find src/ -type f -iname "*.cpp")
 objs := $(srcs:src/%.cpp=obj/%.o)
 deps := $(objs:%.o=%.d)
@@ -30,7 +53,7 @@ deps := $(objs:%.o=%.d)
 # FakeWalletBalance + malformed-config boot loops). We avoid throwing across
 # this boundary in the config path regardless, but pinning the landing pads
 # makes every remaining try/catch a reliable backstop.
-CXXFLAGS := -O3 -flto=auto -fPIC -m32 -std=c++20 \
+CXXFLAGS := -O3 -flto=auto -fPIC $(MARCH) $(ARCHDEF) -std=c++20 \
             -fno-reorder-blocks-and-partition \
             -Wall -Wextra -Wpedantic -Wno-error=format-security \
             -D_GLIBCXX_USE_CXX11_ABI=0
@@ -49,7 +72,7 @@ ifeq ($(shell type mold &> /dev/null && echo "found"),found)
 	LDFLAGS += -fuse-ld=mold
 endif
 
-.PHONY: all build rebuild clean install release test-ascii test-cmwire test-cmclient-loader test-clientcompat test-dlcids test-dlc-scope test-dlc-metadata test-config-path test-config-discovery test-filewatcher-burst test-provision-notice test-mtvar-contains test-synthmark test-appinfostate test-pattern-catalog test-pattern-cache test-pattern-refresh test-process-lock test-process-runtime test-atomic-file test-cache-pair test-appinfo-transaction test-appinfo-reload test-audit-symbols test-audit-policy test-memhlp-target test-memhlp-prologue test-memhlp-pic test-utils-sha test-provision-cache test-provision-refresh test-provision-result test-provision-terminal test-pending-proton test-provision-schedule test-provision-pass test-runtime-dependencies test-thread-start test-steamstub-warmup test-steamstub-launchopt test-boundedexecutor test-steamless-prewarm test-depotkey-scope test-curl-timeout test-contentserverdirectory test-manifest-index test-manifestselection test-manifeststore-io test-hotreload-inputs test-hotreload-package test-ownerqueue test-hotreload-capabilities test-libraryremoval test-pics test-prewarm-backoff test-yaml-runtime test-manifestpin-patterns test-optional-locators test-patternscan test-manifest-zip test-fakeappid-presence test-fakeappid-wiring test-ticket test-familyshare test-familyshare-wiring
+.PHONY: all build rebuild clean install release test-ascii test-cmwire test-cmclient-loader test-clientcompat test-dlcids test-dlc-scope test-dlc-metadata test-config-path test-config-discovery test-filewatcher-burst test-provision-notice test-mtvar-contains test-synthmark test-appinfostate test-pattern-catalog test-pattern-cache test-pattern-refresh test-process-lock test-process-runtime test-atomic-file test-cache-pair test-appinfo-transaction test-appinfo-reload test-audit-symbols test-audit-policy test-memhlp-target test-memhlp-prologue test-memhlp-pic test-utils-sha test-provision-cache test-provision-refresh test-provision-result test-provision-terminal test-pending-proton test-provision-schedule test-provision-pass test-runtime-dependencies test-thread-start test-steamstub-warmup test-steamstub-launchopt test-boundedexecutor test-steamless-prewarm test-depotkey-scope test-curl-timeout test-contentserverdirectory test-manifest-index test-manifestselection test-manifeststore-io test-hotreload-inputs test-hotreload-package test-ownerqueue test-hotreload-capabilities test-libraryremoval test-pics test-prewarm-backoff test-yaml-runtime test-manifestpin-patterns test-optional-locators test-patternscan test-manifest-zip test-fakeappid-presence test-fakeappid-wiring test-ticket test-familyshare test-familyshare-wiring test-patterns-x86_64 test-addr-plausible test-client-layout test-memhlp-range test-detour-x64 test-webhelper-audit loadtest-x64
 .NOTPARALLEL: clean rebuild
 .PHONY: test-library-dates test-library-dates-hook
 .PHONY: test-achievements test-achievement-scope test-stats-audit
@@ -57,6 +80,42 @@ endif
 .PHONY: test-manifestdonor test-manifestfetch
 .PHONY: test-reconcilepin-scan
 .PHONY: test-depotkey-recv-policy
+
+test-client-layout:
+	$(CXX) -std=c++20 -Wall -Wextra -Wpedantic -Werror -I tools \
+		tools/test_client_layout.cpp -o /tmp/test_client_layout
+	/tmp/test_client_layout
+	bash scripts/test-client-layout.sh
+
+# Controlled load of the 64-bit client modules under bin/SLSsteam.so in a throw-away
+# process with an isolated HOME (see scripts/loadtest-x64.sh).  Not part of test-*:
+# it needs an installed Steam and executes the client modules' static initialisers.
+loadtest-x64: bin/SLSsteam.so
+	bash scripts/loadtest-x64.sh
+
+test-webhelper-audit: bin/SLSsteam.so
+	bash scripts/test-webhelper-audit.sh
+
+test-memhlp-range:
+	$(CXX) -std=c++20 -Wall -Wextra -Wpedantic -Werror -I src -I include \
+		tools/test_memhlp_range.cpp -o /tmp/test_memhlp_range
+	/tmp/test_memhlp_range
+
+test-detour-x64: src/detour_x64.cpp tools/test_detour_x64.cpp
+	$(CXX) -std=c++20 -Wall -Wextra -Wpedantic -Werror -I src -I include \
+		tools/test_detour_x64.cpp src/detour_x64.cpp $(libdir)/liblibmem.a \
+		-ldl -lpthread -o /tmp/test_detour_x64
+	/tmp/test_detour_x64
+
+test-addr-plausible:
+	$(CXX) -std=c++20 -Wall -Wextra -Wpedantic -Werror -I src \
+		tools/test_addr_plausible.cpp -o /tmp/test_addr_plausible
+	/tmp/test_addr_plausible
+
+test-patterns-x86_64:
+	$(CXX) -std=c++20 -Wall -Wextra -Wpedantic -I src \
+		tools/test_patterns_x86_64.cpp -o /tmp/test_patterns_x86_64
+	/tmp/test_patterns_x86_64 "$(STEAMCLIENT64)" src/patterns.cpp "$(STEAMUI64)"
 
 test-manifestdonor:
 	$(CXX) -std=c++20 -Wall -Wextra -Wpedantic -Werror \
@@ -69,15 +128,15 @@ test-manifestfetch:
 	/tmp/test_manifestfetch
 
 test-stats-provenance:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
 		-ffunction-sections -fdata-sections tools/test_stats_provenance.cpp \
 		-Wl,--gc-sections -pthread -o /tmp/test_stats_provenance
 	/tmp/test_stats_provenance
 
 test-familyshare: obj/sdk/protobufs/steammessages_base.pb.o
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
 		-ffunction-sections -fdata-sections tools/test_familyshare.cpp \
-		src/sdk/CNetPacket.cpp $^ lib/libprotobuf-lite.a \
+		src/sdk/CNetPacket.cpp $^ $(LIBPROTOBUF) \
 		-Wl,--gc-sections -pthread -o /tmp/test_familyshare
 	/tmp/test_familyshare
 
@@ -97,18 +156,18 @@ test-achievements:
 	/tmp/test_achievements
 
 test-achievement-scope: obj/sdk/protobufs/steammessages_clientserver_userstats.pb.o obj/sdk/protobufs/steammessages_base.pb.o
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
 		tools/test_achievement_scope.cpp src/feats/achievements.cpp src/feats/stats_policy.cpp \
-		$^ lib/libprotobuf-lite.a -pthread -o /tmp/test_achievement_scope
+		$^ $(LIBPROTOBUF) -pthread -o /tmp/test_achievement_scope
 	/tmp/test_achievement_scope
 
 test-fakeappid-presence: obj/sdk/protobufs/encrypted_app_ticket.pb.o \
                           obj/sdk/protobufs/steammessages_base.pb.o \
                           obj/sdk/protobufs/steammessages_clientserver.pb.o \
                           obj/sdk/protobufs/steammessages_clientserver_2.pb.o
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -isystem include -I src \
 		-ffunction-sections -fdata-sections tools/test_fakeappid_presence.cpp \
-		src/feats/fakeappid.cpp src/sdk/CNetPacket.cpp $^ lib/libprotobuf-lite.a \
+		src/feats/fakeappid.cpp src/sdk/CNetPacket.cpp $^ $(LIBPROTOBUF) \
 		-Wl,--gc-sections -pthread -o /tmp/test_fakeappid_presence
 	/tmp/test_fakeappid_presence
 
@@ -118,13 +177,13 @@ test-fakeappid-wiring:
 	/tmp/test_fakeappid_wiring
 
 test-ticket:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
 		-Wall -Wextra -Wpedantic -Werror -I include -I src \
 		tools/test_ticket.cpp -o /tmp/test_ticket
 	/tmp/test_ticket
 
 test-process-runtime:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
 		-Wall -Wextra -Wpedantic \
 		-ffunction-sections -fdata-sections -I include -I src \
 		tools/test_process_runtime.cpp src/process.cpp \
@@ -132,7 +191,7 @@ test-process-runtime:
 	/tmp/test_process_runtime
 
 test-stats-audit: bin/SLSsteam.so
-	$(CXX) -m32 -std=c++20 -rdynamic tools/test_stats_audit.cpp -ldl -o /tmp/test_stats_audit
+	$(CXX) $(MARCH) -std=c++20 -rdynamic tools/test_stats_audit.cpp -ldl -o /tmp/test_stats_audit
 	/tmp/test_stats_audit
 	LD_AUDIT=$(CURDIR)/bin/SLSsteam.so /tmp/test_stats_audit audit
 
@@ -148,7 +207,7 @@ bin/SLSsteam.so: $(objs) $(libs)
 # Loaded ahead of SLSsteam.so via $LD_AUDIT.
 bin/library-inject.so: tools/library-inject/main.cpp
 	@mkdir -p bin
-	$(CXX) -O3 -m32 -fPIC -shared -std=c++20 $< -o $@
+	$(CXX) -O3 $(MARCH) -fPIC -shared -std=c++20 $< -o $@
 
 PATTERN_PUBLIC_KEY_HEX = $(shell tr -d '[:space:]' < res/pattern-public-key.hex 2>/dev/null)
 
@@ -204,8 +263,8 @@ test-cmwire: obj/sdk/protobufs/steammessages_base.pb.o \
              obj/sdk/protobufs/steammessages_clientserver_friends.pb.o \
              obj/sdk/protobufs/steammessages_clientserver_userstats.pb.o \
              obj/sdk/protobufs/encrypted_app_ticket.pb.o
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -DCMWIRE_PROTOBUF \
-		-I include tools/test_cmwire.cpp $^ lib/libprotobuf-lite.a \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -DCMWIRE_PROTOBUF \
+		-I include tools/test_cmwire.cpp $^ $(LIBPROTOBUF) \
 		-lpthread -o /tmp/test_cmwire
 	/tmp/test_cmwire
 
@@ -232,7 +291,7 @@ test-ascii:
 	/tmp/test_ascii
 
 test-dlc-scope:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
 		-Wall -Wextra -Wpedantic -I src -I include \
 		tools/test_dlc_scope.cpp src/feats/dlc.cpp \
 		src/feats/managed_dlc_scope.cpp -pthread \
@@ -240,10 +299,10 @@ test-dlc-scope:
 	/tmp/test_dlc_scope
 
 test-dlc-metadata:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
 		-Wall -Wextra -Wpedantic -I include -I src \
 		tools/test_dlc_metadata.cpp src/feats/dlc_metadata.cpp \
-		lib/libyaml-cpp.a -o /tmp/test_dlc_metadata
+		$(libdir)/libyaml-cpp.a -o /tmp/test_dlc_metadata
 	/tmp/test_dlc_metadata
 
 test-config-path:
@@ -424,10 +483,10 @@ test-curl-timeout:
 	/tmp/test_curl_timeout
 
 test-contentserverdirectory:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
 		-Wall -Wextra -Wpedantic -Werror -I include -I src \
 		tools/test_contentserverdirectory.cpp src/utils/contentserverdirectory.cpp \
-		lib/libyaml-cpp.a -o /tmp/test_contentserverdirectory
+		$(libdir)/libyaml-cpp.a -o /tmp/test_contentserverdirectory
 	/tmp/test_contentserverdirectory
 
 test-manifest-index:
@@ -482,7 +541,7 @@ test-library-dates:
 	/tmp/test_library_dates
 
 test-library-dates-hook:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 \
 		-fno-reorder-blocks-and-partition -ffunction-sections -fdata-sections \
 		-Wall -Wextra -Wpedantic -isystem include -I src \
 		tools/test_library_dates_hook.cpp src/feats/apps.cpp src/feats/librarydates.cpp \
@@ -515,15 +574,15 @@ test-cache-pair:
 	/tmp/test_cache_pair
 
 test-yaml-runtime:
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -I include \
-		tools/test_yaml_runtime.cpp lib/libyaml-cpp.a -o /tmp/test_yaml_runtime
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -I include \
+		tools/test_yaml_runtime.cpp $(libdir)/libyaml-cpp.a -o /tmp/test_yaml_runtime
 	/tmp/test_yaml_runtime
 
 # Non-LTO 32-bit object so the host linker can link the transaction test
 # without choking on LTO bytecode from a different toolchain version.
 obj/feats/appinfo_vdf_test.o: src/feats/appinfo_vdf.cpp $(deps_early)
 	@mkdir -p obj/feats
-	$(CXX) -O2 -fno-lto -fPIC -m32 -std=c++20 -fno-reorder-blocks-and-partition \
+	$(CXX) -O2 -fno-lto -fPIC $(MARCH) $(ARCHDEF) -std=c++20 -fno-reorder-blocks-and-partition \
 		-Wall -Wextra -Wpedantic -Wno-error=format-security \
 		-D_GLIBCXX_USE_CXX11_ABI=0 -DAPPINFO_VDF_TESTING \
 		-I include -isysteminclude -MMD -MP \
@@ -534,11 +593,11 @@ test-appinfo-transaction: obj/feats/appinfo_vdf_test.o obj/log.o obj/config.o \
 		obj/feats/depotkey.o obj/feats/manifestid.o obj/feats/librarydates.o \
 		obj/ownerwork.o obj/sdk/protobufs/steammessages_clientserver_appinfo.pb.o \
 		obj/sdk/protobufs/steammessages_base.pb.o
-	$(CXX) -m32 -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -DAPPINFO_VDF_TESTING \
+	$(CXX) $(MARCH) -std=c++20 -D_GLIBCXX_USE_CXX11_ABI=0 -DAPPINFO_VDF_TESTING \
 		-I include -isysteminclude tools/test_appinfo_transaction.cpp \
 		obj/feats/appinfo_vdf_test.o \
 		$(filter-out obj/feats/appinfo_vdf_test.o,$(filter obj/%.o,$^)) \
-		lib/libyaml-cpp.a lib/libprotobuf-lite.a -lcrypto -lpthread -ldl \
+		$(libdir)/libyaml-cpp.a $(LIBPROTOBUF) -lcrypto -lpthread -ldl \
 		-o /tmp/test_appinfo_transaction
 	/tmp/test_appinfo_transaction
 
@@ -557,7 +616,7 @@ test-cmclient-live: build
 		obj/sdk/protobufs/steammessages_clientserver_friends.pb.o \
 		obj/sdk/protobufs/steammessages_clientserver_userstats.pb.o \
 		obj/sdk/protobufs/encrypted_app_ticket.pb.o \
-		lib/libprotobuf-lite.a lib/libyaml-cpp.a \
+		$(LIBPROTOBUF) $(libdir)/libyaml-cpp.a \
 		-lpthread -ldl -lcurl -o /tmp/test_cmclient_live
 
 test-manifestpin-patterns:

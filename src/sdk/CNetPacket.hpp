@@ -4,6 +4,7 @@
 
 #include "protobufs/steammessages_base.pb.h"
 
+#include "../addr_plausible.hpp"
 #include "../log.hpp"
 
 #include <atomic>
@@ -49,9 +50,20 @@ public:
 	constexpr static uint32_t MAX_PLAUSIBLE_SIZE = 100u * 1024 * 1024;
 
 	// Base field offsets on the classic (stable) layout.
+#if defined(__x86_64__)
+	// steamrt64 layout (AceSLS/SLSsteam CNetPacket): pointers are 8 bytes and the
+	// header is 0x10 bytes wide.  The +8 shift probe below is an i386 beta
+	// artefact and is only a candidate here, never a verified 64-bit layout.
+	constexpr static std::size_t OFF_BODY = 0x10;
+	constexpr static std::size_t OFF_SIZE = 0x18;
+	constexpr static std::size_t OFF_ORIGBODY = 0x20;
+	constexpr static std::size_t RAW_SIZE = 0x40;
+#else
 	constexpr static std::size_t OFF_BODY = 0x4;
 	constexpr static std::size_t OFF_SIZE = 0x8;
 	constexpr static std::size_t OFF_ORIGBODY = 0x10;
+	constexpr static std::size_t RAW_SIZE = 0x20;
+#endif
 
 	// Detected field shift (0 = classic/stable layout).  int, single writer
 	// (detectLayout runs on the CM receive thread); benign as a plain global.
@@ -63,7 +75,7 @@ private:
 	// holds every field of both layouts (the highest is originalBody at
 	// 0x10 + 8 = 0x18, four bytes, ending at 0x1C); a Steam beta packet is
 	// larger still, and this only ever overlays it.
-	uint8_t raw_[0x20];
+	uint8_t raw_[RAW_SIZE];
 
 	template <typename T>
 	T fieldGet(std::size_t off) const
@@ -80,8 +92,7 @@ private:
 
 	static bool plausibleBody(CNetPacketBody* body)
 	{
-		const auto address = reinterpret_cast<std::uintptr_t>(body);
-		return address >= 0x10000u && address < 0xFFFFF000u;
+		return Addr::plausibleUserPointer(static_cast<const void*>(body));
 	}
 
 public:
@@ -260,6 +271,6 @@ public:
 	}
 
 	void free();
-}; //0x20
+}; //0x20 on i386, 0x40 on x86_64 (raw storage only; Steam's packet is larger)
 
-static_assert(sizeof(CNetPacket) == 0x20);
+static_assert(sizeof(CNetPacket) == CNetPacket::RAW_SIZE);

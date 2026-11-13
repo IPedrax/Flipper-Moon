@@ -71,7 +71,9 @@ static bool cleanEnvVar(const char* varName, const char* endsWith)
 		auto split = splits.at(i);
 		if (split.ends_with(endsWith))
 		{
-			g_pLog->debug("Removed %s from $%s\n", endsWith, varName);
+			// g_pLog does not exist yet when the x86_64 webhelper branch cleans the env
+			if (g_pLog)
+				g_pLog->debug("Removed %s from $%s\n", endsWith, varName);
 			continue;
 		}
 
@@ -171,6 +173,23 @@ static void setup()
 		return;
 	}
 
+#if defined(__x86_64__)
+	// SteamRT3 starts the client as
+	//   steam -> srt-client-container -> srt-bwrap -> pv-adverb -> steam
+	// The inner `steam` is the client to audit, and srt-client-container (above it)
+	// also spawns the games, so LD_AUDIT cannot be cleared early in `steam` any more:
+	// it has to survive down to the inner process.  Only the webhelper clears it.
+	if (strcmp(proc.name, "steamwebhelper") == 0)
+	{
+		cleanEnvVar("LD_AUDIT", "SLSsteam.so");
+		cleanEnvVar("LD_AUDIT", "library-inject.so");
+		cleanEnvVar("LD_AUDIT", "libSLSsteam.so");
+		cleanEnvVar("LD_AUDIT", "libSLS-library-inject.so");
+		unload();
+		return;
+	}
+#endif
+
 	//Do not do anything in other processes
 	if (strcmp(proc.name, "steam") != 0)
 	{
@@ -251,10 +270,12 @@ static void setup()
 	// (reaper, steamwebhelper, games) don't re-audit and re-run our
 	// hooks in foreign processes.  setup() also early-outs on non-steam
 	// processes, but cleaning the env is cheaper and avoids surprises.
+#if !defined(__x86_64__)
 	cleanEnvVar("LD_AUDIT", "SLSsteam.so");
 	cleanEnvVar("LD_AUDIT", "library-inject.so");
 	cleanEnvVar("LD_AUDIT", "libSLSsteam.so");
 	cleanEnvVar("LD_AUDIT", "libSLS-library-inject.so");
+#endif
 
 
 	if(!g_config.init())

@@ -2,6 +2,22 @@
 
 #include "libraryremoval.hpp"
 
+// SteamUI protobuf layout and cdecl entry points are i386-only for now.
+#if defined(__x86_64__)
+
+namespace LibraryRemoval
+{
+	bool setup() noexcept { return false; }
+	void remove() noexcept {}
+	bool ready() noexcept { return false; }
+	void queue(std::uint32_t) noexcept {}
+	void cancel(std::uint32_t) noexcept {}
+	void restore(std::uint32_t) noexcept {}
+}
+
+#else
+
+
 #include "hotreload_inputs.hpp"
 #include "hotreload_capabilities.hpp"
 #include "libraryremoval_policy.hpp"
@@ -321,3 +337,5 @@ void restore(std::uint32_t appId) noexcept
 }
 
 } // namespace LibraryRemoval
+
+#endif // __x86_64__

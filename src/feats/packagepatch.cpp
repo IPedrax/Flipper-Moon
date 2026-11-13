@@ -4,6 +4,37 @@
 
 #include "packagepatch.hpp"
 
+// The PackageInfo / LoadPackage layout is only reverse-engineered for the
+// Linux i386 client (see sdk/CPackageInfo.hpp). Until the steamrt64 layout is
+// verified against the 64-bit steamclient.so (PLAN.md, phase 4) the hook stays
+// off instead of running with guessed offsets.
+#if defined(__x86_64__)
+
+#include "../globals.hpp"
+#include "../log.hpp"
+
+namespace PackagePatch
+{
+	bool isInjectedAppId(uint32_t) { return false; }
+	bool setup()
+	{
+		if (g_pLog) g_pLog->warn("PackagePatch: not ported to x86_64 yet, package hot reload disabled\n");
+		return false;
+	}
+	void remove() {}
+	bool injectIntoPackage0(const std::vector<uint32_t>&) { return false; }
+	void setExtraAppIds(const std::vector<uint32_t>&) {}
+	void tryReconcileLicenses() {}
+	void forceReconcileLicenses() {}
+	void synchronizePackage0(const PackageSnapshot&) {}
+	bool runtimeRefreshReady() { return false; }
+	bool runtimeRefreshPending() noexcept { return false; }
+	void reprocessCurrentState() noexcept {}
+}
+
+#else
+
+
 #include "../afftrace.hpp"
 #include "../config.hpp"
 #include "../globals.hpp"
@@ -1208,3 +1239,5 @@ namespace PackagePatch
 		}
 	}
 }
+
+#endif // __x86_64__
