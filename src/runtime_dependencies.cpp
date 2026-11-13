@@ -39,7 +39,6 @@ namespace
 std::string missingToolsOnPath(const char* path)
 {
 	return missingTools(
-		executableOnPath(path, "unzip"),
 		executableOnPath(path, "gzip"),
 		executableOnPath(path, "timeout")
 	);
