@@ -1070,6 +1070,48 @@ namespace
 	}
 }
 
+namespace
+{
+	// Shared by la_symbind32 (i386 loader) and la_symbind64 (x86_64 loader): a
+	// process only ever receives the callback of its own ELF class, so the 32-bit
+	// entry is dead code on x86_64 and the CEF port rewrite needs the 64-bit one.
+	uintptr_t bindAuditSymbol(uintptr_t orig, uintptr_t* refcook, uintptr_t* defcook,
+	                          const char* symname) noexcept
+	{
+		const AuditBinding::Symbol symbol = AuditBinding::classify(symname);
+		if (symbol == AuditBinding::Symbol::None)
+			return orig;
+
+		logAuditBinding(symbol, refcook, defcook);
+		switch (symbol)
+		{
+			case AuditBinding::Symbol::LocalStatsEpoch:
+				return reinterpret_cast<uintptr_t>(&slsteam_local_stats_epoch_v1);
+			case AuditBinding::Symbol::Execv:
+				if (!g_realExecv) g_realExecv = reinterpret_cast<execv_t>(orig);
+				return reinterpret_cast<uintptr_t>(&cefExecv);
+			case AuditBinding::Symbol::Execvp:
+				if (!g_realExecvp) g_realExecvp = reinterpret_cast<execv_t>(orig);
+				return reinterpret_cast<uintptr_t>(&cefExecvp);
+			case AuditBinding::Symbol::Execve:
+				if (!g_realExecve) g_realExecve = reinterpret_cast<execve_t>(orig);
+				return reinterpret_cast<uintptr_t>(&cefExecve);
+			case AuditBinding::Symbol::Execvpe:
+				if (!g_realExecvpe) g_realExecvpe = reinterpret_cast<execve_t>(orig);
+				return reinterpret_cast<uintptr_t>(&cefExecvpe);
+			case AuditBinding::Symbol::PosixSpawn:
+				if (!g_realSpawn) g_realSpawn = reinterpret_cast<spawn_t>(orig);
+				return reinterpret_cast<uintptr_t>(&cefSpawn);
+			case AuditBinding::Symbol::PosixSpawnp:
+				if (!g_realSpawnp) g_realSpawnp = reinterpret_cast<spawn_t>(orig);
+				return reinterpret_cast<uintptr_t>(&cefSpawnp);
+			case AuditBinding::Symbol::None:
+				break;
+		}
+		return orig;
+	}
+}
+
 extern "C" uintptr_t la_symbind32(Elf32_Sym* sym,
                                   __attribute__((unused)) unsigned int ndx,
                                   uintptr_t* refcook,
@@ -1079,39 +1121,19 @@ extern "C" uintptr_t la_symbind32(Elf32_Sym* sym,
 {
 	if (sym == nullptr)
 		return 0;
+	return bindAuditSymbol(static_cast<uintptr_t>(sym->st_value), refcook, defcook, symname);
+}
 
-	const AuditBinding::Symbol symbol = AuditBinding::classify(symname);
-	if (symbol == AuditBinding::Symbol::None)
-		return sym->st_value;
-
-	logAuditBinding(symbol, refcook, defcook);
-	const auto orig = static_cast<uintptr_t>(sym->st_value);
-	switch (symbol)
-	{
-		case AuditBinding::Symbol::LocalStatsEpoch:
-			return reinterpret_cast<uintptr_t>(&slsteam_local_stats_epoch_v1);
-		case AuditBinding::Symbol::Execv:
-			if (!g_realExecv) g_realExecv = reinterpret_cast<execv_t>(orig);
-			return reinterpret_cast<uintptr_t>(&cefExecv);
-		case AuditBinding::Symbol::Execvp:
-			if (!g_realExecvp) g_realExecvp = reinterpret_cast<execv_t>(orig);
-			return reinterpret_cast<uintptr_t>(&cefExecvp);
-		case AuditBinding::Symbol::Execve:
-			if (!g_realExecve) g_realExecve = reinterpret_cast<execve_t>(orig);
-			return reinterpret_cast<uintptr_t>(&cefExecve);
-		case AuditBinding::Symbol::Execvpe:
-			if (!g_realExecvpe) g_realExecvpe = reinterpret_cast<execve_t>(orig);
-			return reinterpret_cast<uintptr_t>(&cefExecvpe);
-		case AuditBinding::Symbol::PosixSpawn:
-			if (!g_realSpawn) g_realSpawn = reinterpret_cast<spawn_t>(orig);
-			return reinterpret_cast<uintptr_t>(&cefSpawn);
-		case AuditBinding::Symbol::PosixSpawnp:
-			if (!g_realSpawnp) g_realSpawnp = reinterpret_cast<spawn_t>(orig);
-			return reinterpret_cast<uintptr_t>(&cefSpawnp);
-		case AuditBinding::Symbol::None:
-			break;
-	}
-	return sym->st_value;
+extern "C" uintptr_t la_symbind64(Elf64_Sym* sym,
+                                  __attribute__((unused)) unsigned int ndx,
+                                  uintptr_t* refcook,
+                                  uintptr_t* defcook,
+                                  __attribute__((unused)) unsigned int* flags,
+                                  const char* symname)
+{
+	if (sym == nullptr)
+		return 0;
+	return bindAuditSymbol(static_cast<uintptr_t>(sym->st_value), refcook, defcook, symname);
 }
 
 extern "C" unsigned int la_objopen(struct link_map* map,
