@@ -13,8 +13,23 @@ and the full status table: [`docs/X86_64.md`](docs/X86_64.md).
 
 ## Install
 
-Requirements: a desktop Linux with the 64-bit Steam client (the default), `curl`, a terminal and
-`sudo` (see [Supported platforms](#supported-platforms): SteamOS is not supported). The installer stops Steam and asks for your password once.
+### Requirements
+
+- **System:** desktop Linux on x86_64 with glibc 2.34 or newer (the library is built on
+  Ubuntu 22.04). Debian 13 is the tested system; see
+  [Supported platforms](#supported-platforms) (SteamOS is not supported).
+- **Steam:** the **64-bit client**, already started once so that
+  `~/.local/share/Steam/steamrt64/` exists. If that folder is missing, Steam either has not
+  started yet or is still on the 32-bit client, which this repository does not support (use
+  the upstream repository).
+- **Tools:** `bash`, `curl` and `sudo`, plus `unzip` or `python3` to unpack the downloads
+  (`sha256sum` and `gzip` ship with the base system). Run it as your normal user, not as root.
+- **Libraries:** the system `libcurl` and OpenSSL (Debian: `libcurl4 libssl3`; Arch:
+  `curl openssl`). On a regular distribution the upstream installer installs missing
+  packages itself, with `sudo`.
+- **Network:** access to GitHub, since the installer downloads this repository's release, the
+  upstream installer, Lumen and the LuaTools plugin.
+- **Account:** the installer stops Steam and asks for your `sudo` password once.
 
 **1. If you already have the upstream (32-bit) slsteam-moon / luatools-moon, remove it first.**
 Run the upstream uninstaller, which cleans the old library, wrapper, launcher patches,
