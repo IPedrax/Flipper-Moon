@@ -1,6 +1,6 @@
 # Building slsteam-moon
 
-slsteam-moon is a 32-bit shared library that hooks into Steam through
+slsteam-moon is a shared library that hooks into the 64-bit Steam client through
 `LD_AUDIT`. The build produces two artefacts:
 
 - `bin/SLSsteam.so` — main hook library
@@ -35,15 +35,13 @@ on; use the portable mode for anything you ship.
 Dependencies (Ubuntu/Debian):
 
 ```
-sudo dpkg --add-architecture i386
-sudo apt update
-sudo apt install g++-multilib make libssl-dev:i386 libcurl4-openssl-dev:i386
+sudo apt install g++ make libssl-dev libcurl4-openssl-dev pkg-config
 ```
 
-Arch:
+Arch (host build verified in an `archlinux` container, GCC 16.2.1, glibc 2.44, 2026-11-13):
 
 ```
-sudo pacman -S multilib/lib32-gcc-libs multilib/lib32-openssl multilib/lib32-curl
+sudo pacman -S base-devel curl openssl pkgconf
 ```
 
 The `--host` script sniffs for these and tells you what's missing.
@@ -122,12 +120,12 @@ slsteam-moon only hooks the 32-bit client; `setup.sh` handles this.
 newer system than the user's. Rebuild with `scripts/build.sh --portable`,
 or pick an older base image in `scripts/Dockerfile`.
 
-**`cannot open shared object file` for libssl/libcurl** — missing 32-bit
+**`cannot open shared object file` for libssl/libcurl** — missing
 runtime libraries on the host:
 
 ```
-sudo apt install libssl3:i386 libcurl4:i386      # Ubuntu/Debian
-sudo pacman -S lib32-openssl lib32-curl          # Arch
+sudo apt install libssl3 libcurl4                # Ubuntu/Debian
+sudo pacman -S openssl curl                      # Arch
 ```
 
 **Docker permission denied** — add yourself to the docker group, or use
