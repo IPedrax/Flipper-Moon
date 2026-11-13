@@ -11,18 +11,48 @@ added games, and downloading a non-owned title. Hooks installed but not yet exer
 reconcile pin, depot quarantine, parental restrictions and the stats redirect. Details
 and the full status table: [`docs/X86_64.md`](docs/X86_64.md).
 
-Install (builds a 64-bit library, then runs the stock luatools-moon installer with
-the pieces that cannot work on a 64-bit client replaced):
+## Install
+
+Requirements: Linux with the 64-bit Steam client (the default), `curl`, a terminal and
+`sudo`. The installer stops Steam and asks for your password once.
+
+**1. If you already have the upstream (32-bit) slsteam-moon / luatools-moon, remove it first.**
+Run the upstream uninstaller, which cleans the old library, wrapper, launcher patches,
+CloudRedirect hook, Lumen and the LuaTools plugin:
 
 ```sh
-./install-x86_64.sh --slsteam-zip slsteam-moon-linux-<version>-x86_64.zip
+curl -fsSL https://raw.githubusercontent.com/swwayps/luatools-moon/main/uninstall.sh | bash
 ```
 
-Updates: after installing Lumen, the installer repoints the few places where Lumen
-hard-codes the upstream repositories (the About tab's update check, the Update All
-button, the auto-fix offer) to this repository, so Update All installs the latest
-x86_64 release here instead of the 32-bit upstream one. Lumen and the LuaTools plugin
-themselves are still downloaded from their upstream repositories.
+It also deletes `~/.config/SLSsteam` (your `config.yaml` and depot keys): copy that folder
+first if you want to keep it. In the clean reinstall this was tested with, the Lua scripts of
+the games you added (`<Steam>/config/stplug-in/`) were left in place. Installing over an
+existing 32-bit install without this step has not been tested. Skip the step on a machine
+that never had slsteam-moon.
+
+**2. Install, in one command:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ogb4n/slsteam-moon-x64/main/install-x86_64.sh | bash
+```
+
+It downloads the latest x86_64 release of this repository, then runs the upstream
+luatools-moon installer with the 64-bit pieces swapped in (Lumen and the LuaTools plugin
+come from their upstream repositories). CloudRedirect is skipped because its hook is a
+32-bit library: Steam Cloud is disabled for added games (`DisableCloud: yes`).
+
+**3. Start Steam** from your applications menu. The first launch can take a while.
+
+## Update and uninstall
+
+- **Update:** use Lumen's About tab, "Update All", or rerun the install command above.
+  The installer repoints the few places where Lumen hard-codes the upstream repositories
+  (the update check, the Update All button, the auto-fix offer) to this repository, so an
+  update installs the latest x86_64 release here and never the 32-bit upstream one. If a
+  Lumen update changes that text, the installer warns and exits with an error.
+- **Uninstall:** the same upstream `uninstall.sh` as in step 1 removes everything installed
+  here as well.
+- **Offline or local zip:** `./install-x86_64.sh --slsteam-zip slsteam-moon-linux-<version>-x86_64.zip`.
 
 Build: [`docs/BUILDING.md`](docs/BUILDING.md). Upstream history is kept; the 32-bit code
 is still in the tree and will be removed in a separate change.
