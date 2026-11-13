@@ -289,6 +289,66 @@ kill_steam() {
 # Install steps
 # ============================================================================
 
+# Directory of the client modules Steam will actually load from a Steam root.
+# Same rule as steam.sh: the SteamRT 64-bit client (steamrt64/) is the default; the
+# sentinel .steam-disable-steamrt64-client, or STEAM_FORCE_CLIENT=ubuntu12_32|scout|ldlp,
+# selects the legacy 32-bit client (ubuntu12_32/); STEAM_FORCE_CLIENT=steamrt64|
+# steamrt3c|steamrt wins over the sentinel.  Without steamrt64/steam and a client
+# there, only the legacy layout exists.  (Copy of the one in the generated wrapper: keep in sync.)
+slsm_client_dir() {
+	_slsm_cd_root="$1"
+	case "${STEAM_FORCE_CLIENT:-}" in
+		ubuntu12_32|scout|ldlp) printf '%s/ubuntu12_32' "$_slsm_cd_root"; return 0 ;;
+		steamrt64|steamrt3c|steamrt) _slsm_cd_force64=1 ;;
+		*) _slsm_cd_force64=0 ;;
+	esac
+	if [ "$_slsm_cd_force64" != 1 ] && [ -e "$_slsm_cd_root/.steam-disable-steamrt64-client" ]; then
+		printf '%s/ubuntu12_32' "$_slsm_cd_root"; return 0
+	fi
+	if [ -x "$_slsm_cd_root/steamrt64/steam" ] && [ -f "$_slsm_cd_root/steamrt64/steamclient.so" ]; then
+		printf '%s/steamrt64' "$_slsm_cd_root"; return 0
+	fi
+	printf '%s/ubuntu12_32' "$_slsm_cd_root"
+}
+
+# ELF class of a file: 32, 64 or ? (byte 4 of the header; no readelf/file needed).
+slsm_elf_class() {
+	case "$(od -An -tx1 -j4 -N1 "$1" 2>/dev/null | tr -d ' \n')" in
+		01) echo 32 ;;
+		02) echo 64 ;;
+		*) echo '?' ;;
+	esac
+}
+
+# SLSsteam.so is loaded INTO the Steam client process, so its ELF class must match the
+# client's.  Refuse to install a mismatching build instead of leaving a wrapper that
+# starts Steam without the injection (the loader just ignores a wrong-class audit
+# library).  Silent when no client is found (fresh install) or a class is unknown.
+check_client_class() {
+	for _r in "$HOME/.steam/steam" "$HOME/.steam/debian-installation" "$HOME/.local/share/Steam"; do
+		_dir="$(slsm_client_dir "$_r")"
+		[ -f "$_dir/steamclient.so" ] || continue
+		_client_class="$(slsm_elf_class "$_dir/steamclient.so")"
+		_lib_class="$(slsm_elf_class "$LIB")"
+		if [ "$_client_class" != '?' ] && [ "$_lib_class" != '?' ] && [ "$_client_class" != "$_lib_class" ]; then
+			log_error "$LIB is a ${_lib_class}-bit build but the Steam client in $_dir is ${_client_class}-bit"
+			echo ""
+			echo "   SLSsteam.so is loaded inside the client process, so both must match."
+			if [ "$_client_class" = 64 ]; then
+				echo "   This Steam runs the SteamRT 64-bit client: use an x86_64 build (plain 'make')."
+			else
+				echo "   This Steam runs the legacy 32-bit client (STEAM_FORCE_CLIENT / .steam-disable-steamrt64-client):"
+				echo "   use an i386 build ('make ARCH=i386') or switch Steam back to the 64-bit client."
+			fi
+			echo ""
+			exit 1
+		fi
+		log_info "Steam client: $_dir (${_client_class}-bit), SLSsteam.so: ${_lib_class}-bit"
+		return 0
+	done
+	return 0
+}
+
 install_slssteam()
 {
 	LIB="./bin/SLSsteam.so"
@@ -302,6 +362,8 @@ install_slssteam()
 		echo ""
 		exit 1
 	fi
+
+	check_client_class
 
 	log_info "Installing SLSsteam libraries"
 	mkdir -p "$SLSDIR" || exit 1
@@ -609,13 +671,34 @@ guard_session_id() {
 guard_has_display() {
 	[ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
 }
-# Identify the Steam client library (size:mtime of the 32-bit steamclient.so we
-# hook). A client self-update rewrites it, changing this id - the signal that a
-# startup crash is a compatibility break rather than a one-off. Empty when no
-# client is found yet (fresh install): callers then stay conservative.
+# Directory of the client modules Steam will actually load from a Steam root.
+# Same rule as steam.sh: the SteamRT 64-bit client (steamrt64/) is the default; the
+# sentinel .steam-disable-steamrt64-client, or STEAM_FORCE_CLIENT=ubuntu12_32|scout|ldlp,
+# selects the legacy 32-bit client (ubuntu12_32/); STEAM_FORCE_CLIENT=steamrt64|
+# steamrt3c|steamrt wins over the sentinel.  Without steamrt64/steam and a client
+# there, only the legacy layout exists.  (Copy kept in the installer: keep in sync.)
+slsm_client_dir() {
+	_slsm_cd_root="$1"
+	case "${STEAM_FORCE_CLIENT:-}" in
+		ubuntu12_32|scout|ldlp) printf '%s/ubuntu12_32' "$_slsm_cd_root"; return 0 ;;
+		steamrt64|steamrt3c|steamrt) _slsm_cd_force64=1 ;;
+		*) _slsm_cd_force64=0 ;;
+	esac
+	if [ "$_slsm_cd_force64" != 1 ] && [ -e "$_slsm_cd_root/.steam-disable-steamrt64-client" ]; then
+		printf '%s/ubuntu12_32' "$_slsm_cd_root"; return 0
+	fi
+	if [ -x "$_slsm_cd_root/steamrt64/steam" ] && [ -f "$_slsm_cd_root/steamrt64/steamclient.so" ]; then
+		printf '%s/steamrt64' "$_slsm_cd_root"; return 0
+	fi
+	printf '%s/ubuntu12_32' "$_slsm_cd_root"
+}
+# Identify the Steam client library (size:mtime of the steamclient.so we hook, in
+# the layout Steam will load). A client self-update rewrites it, changing this id -
+# the signal that a startup crash is a compatibility break rather than a one-off.
+# Empty when no client is found yet (fresh install): callers then stay conservative.
 guard_client_fp() {
 	for _r in "$HOME/.steam/steam" "$HOME/.steam/debian-installation" "$HOME/.local/share/Steam"; do
-		_c="$_r/ubuntu12_32/steamclient.so"
+		_c="$(slsm_client_dir "$_r")/steamclient.so"
 		if [ -e "$_c" ]; then
 			stat -c '%s:%Y' "$_c" 2>/dev/null || stat -f '%z:%m' "$_c" 2>/dev/null || printf '?'
 			return 0
@@ -770,8 +853,9 @@ slsm_pattern_steam_root() {
 	for _slsm_root in "$HOME/.steam/steam" \
 	                  "$HOME/.steam/debian-installation" \
 	                  "$HOME/.local/share/Steam"; do
-		if [ -f "$_slsm_root/ubuntu12_32/steamclient.so" ] && \
-		   [ -f "$_slsm_root/ubuntu12_32/steamui.so" ]; then
+		_slsm_dir="$(slsm_client_dir "$_slsm_root")"
+		if [ -f "$_slsm_dir/steamclient.so" ] && \
+		   [ -f "$_slsm_dir/steamui.so" ]; then
 			printf '%s' "$_slsm_root"
 			return 0
 		fi
