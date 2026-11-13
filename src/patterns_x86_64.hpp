@@ -266,6 +266,25 @@ namespace PatternsX64
 			{ "CUser::m_CompatManager",
 			  "48 8D 83 ? ? 00 00 48 89 DE 48 89 C7 48 89 84 24 ? ? 00 00 E8 ? ? ? ? 66 0F 6F 1D ? ? ? ? 48 89 DE 48 C7 83 ? ? 00 00 FF FF FF FF",
 			  Follow::None, {} },
+			// Parental controls.  The settings receiver (i386 twin 0x1abe750) is the one function
+			// with its three log lines; arguments (instance, settings, len, signature, len, a6, a7)
+			// map straight onto the System V convention, the seventh on the stack.
+			{ "ParentalSettingsReceived", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "Parental settings failed to parse for account ID %u",
+			    "Failed to cache settings for account ID %u",
+			    "Parental settings signature did not verify for account ID %u" } },
+			// `test al,al; jne ok` after the signature check of the cached settings (i386 twin: the
+			// function at 0x1abde10, same jne over the "did not verify for cached settings" log).
+			{ "ParentalSignatureCheck",
+			  "84 C0 75 ? 8B 93 ? ? 00 00 48 8D AC 24 ? ? 00 00 31 C0 48 8D 35 ? ? ? ? 48 89 EF E8",
+			  Follow::None, {} },
+			// CAPIJobRequestUserStats body, the job that applies the Player.GetUserStats#1 answer
+			// (i386 twin 0x1bcdb70); the hook only logs its result.
+			{ "CAPIJob::GetPlayerStats", "", Follow::StringXref, {},
+			  "", "", -1, {}, {}, false, {},
+			  { "Player.GetUserStats#1", "Unexpected StatID %hu for GameID %llu",
+			    "[AppID %u] CAPIJobRequestUserStats - updated schema from server" } },
 			// i386 twin 0x133cc30: 8 direct callers on both sides; its sibling that shares
 			// the log line has 2.
 			{ "CDepotDownloadMgr::BuildDepotDependency", "", Follow::StringXref, {},
