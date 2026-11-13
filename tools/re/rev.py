@@ -1,5 +1,5 @@
 import struct, bisect, re, sys, subprocess
-import os; PATH=os.path.expanduser('~/.local/share/Steam/steamrt64/steamclient.so')
+import os; PATH=os.path.expanduser(os.environ.get('REV_PATH','~/.local/share/Steam/steamrt64/steamclient.so'))
 class Elf:
     def __init__(s,path=PATH):
         s.d=open(path,'rb').read()

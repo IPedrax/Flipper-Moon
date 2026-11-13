@@ -1,5 +1,5 @@
 import struct,re,bisect
-import os; P32=os.path.expanduser('~/.local/share/Steam/ubuntu12_32/steamclient.so')
+import os; P32=os.path.expanduser(os.environ.get('REV32_PATH','~/.local/share/Steam/ubuntu12_32/steamclient.so'))
 class Elf32:
     def __init__(s,path=P32):
         s.d=d=open(path,'rb').read()
