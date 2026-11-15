@@ -33,6 +33,7 @@
 #include "../ascii.hpp"
 #include "../globals.hpp"
 #include "../log.hpp"
+#include "../nss_warmup.hpp"
 #include "../ownerwork.hpp"
 #include "../bootprof.hpp"
 #include "../thread_start.hpp"
@@ -205,6 +206,8 @@ static curl_easy_strerror_t p_curl_easy_strerror = nullptr;
 bool loadCurl()
 {
 	if (p_curl_easy_init) return true;
+	// Warm the NSS host modules before libcurl's resolver threads (B-17).
+	nss::warmHostModules();
 	void* h = dlopen("libcurl.so.4", RTLD_NOLOAD | RTLD_LAZY);
 	if (!h) h = dlopen("libcurl.so.4", RTLD_LAZY);
 	if (!h) h = RTLD_DEFAULT;

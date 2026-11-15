@@ -5,6 +5,7 @@
 #include "../feats/manifeststore.hpp"
 #include "../log.hpp"
 #include "../cainfo.hpp"
+#include "../nss_warmup.hpp"
 #include "boundedexecutor.hpp"
 #include "../sdk/IClientAppManager.hpp"
 
@@ -220,6 +221,8 @@ static std::mutex g_curlLoadMutex;
 
 static bool load_curl() {
 	std::lock_guard lock(g_curlLoadMutex);
+	// Warm the NSS host modules before libcurl's resolver threads (B-17).
+	nss::warmHostModules();
 	if (p_curl_easy_init && p_curl_easy_setopt && p_curl_easy_perform
 	    && p_curl_easy_cleanup && p_curl_slist_append
 	    && p_curl_slist_free_all)

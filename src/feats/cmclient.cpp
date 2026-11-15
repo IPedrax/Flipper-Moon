@@ -30,6 +30,7 @@
 #include "../config.hpp"
 #include "../log.hpp"
 #include "../cainfo.hpp"
+#include "../nss_warmup.hpp"
 
 #include "../sdk/protobufs/steammessages_base.pb.h"
 
@@ -138,6 +139,8 @@ curl_easy_strerror_t p_strerror = nullptr;
 bool loadCurl()
 {
 	if (p_init) return true;
+	// Warm the NSS host modules before libcurl's resolver threads (B-17).
+	nss::warmHostModules();
 	void* h = dlopen("libcurl.so.4", RTLD_NOLOAD | RTLD_LAZY);
 	if (!h) h = dlopen("libcurl.so.4", RTLD_LAZY);
 	if (!h) h = RTLD_DEFAULT;
