@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <thread>
+#include <sys/inotify.h>
 #include <unistd.h>
 
 using namespace std::chrono_literals;
@@ -76,12 +77,34 @@ void maximumWindowBoundsContinuousTraffic()
 	CHECK(elapsed >= 80ms && elapsed < 220ms,
 	      "continuous traffic is bounded by the maximum window");
 }
+
+void closedDescriptorStopsInsteadOfSpinning()
+{
+	const int idleFd = inotify_init1(IN_CLOEXEC);
+	CHECK(idleFd >= 0, "idle inotify fd created");
+	auto start = std::chrono::steady_clock::now();
+	CHECK(FileWatcherBurst::waitReadable(idleFd, 50) == FileWatcherBurst::Wait::Idle,
+	      "open inotify fd without events is idle");
+	CHECK(std::chrono::steady_clock::now() - start >= 45ms,
+	      "idle wait blocks for the timeout");
+	close(idleFd);
+
+	const int closedFd = inotify_init1(IN_CLOEXEC);
+	CHECK(closedFd >= 0, "closed-fd fixture created");
+	close(closedFd);
+	start = std::chrono::steady_clock::now();
+	CHECK(FileWatcherBurst::waitReadable(closedFd, 500) == FileWatcherBurst::Wait::Closed,
+	      "inotify fd closed under the watcher is reported as closed");
+	CHECK(std::chrono::steady_clock::now() - start < 100ms,
+	      "closed fd is reported without waiting for the timeout");
+}
 } // namespace
 
 int main()
 {
 	quietWindowCoalescesOneBurst();
 	maximumWindowBoundsContinuousTraffic();
+	closedDescriptorStopsInsteadOfSpinning();
 	if (failures == 0) std::puts("all filewatcher burst checks passed");
 	return failures == 0 ? 0 : 1;
 }

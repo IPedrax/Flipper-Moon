@@ -10,6 +10,22 @@
 namespace FileWatcherBurst
 {
 
+enum class Wait { Readable, Idle, Closed };
+
+// POLLNVAL/POLLERR/POLLHUP are level-triggered: once the fd is gone (the
+// steamrt64 bootstrapper closes every inherited descriptor after setup() has
+// started the watcher) poll() reports them without blocking on every call, so
+// treating them as idle turns the bounded wait into a busy loop.
+inline Wait waitReadable(int fd, int timeoutMs) noexcept
+{
+	struct pollfd pfd{};
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	if (poll(&pfd, 1, timeoutMs) <= 0) return Wait::Idle;
+	if ((pfd.revents & (POLLNVAL | POLLERR | POLLHUP)) != 0) return Wait::Closed;
+	return (pfd.revents & POLLIN) != 0 ? Wait::Readable : Wait::Idle;
+}
+
 // The caller has already consumed the first readable batch. Drain every
 // additional batch that arrives inside one quiet window, but return
 // periodically under continuous traffic so configuration updates cannot be
