@@ -91,6 +91,11 @@ jobs:
           cp dist/slsteam-moon-linux-*-x86_64.zip dist/slsteam-moon-linux-*-x86_64.zip.sha256 release/
           cp install-x86_64.sh autofix.sh release/
 
+      # Bare library + the status file the moon64 switcher gates a prebuilt on.
+      # Fails the build if the committed pattern table regressed.
+      - name: moon64 prebuilt assets
+        run: scripts/moon64-assets.sh bin/SLSsteam.so release/
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-files
@@ -133,8 +138,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -eu
-          for f in install-x86_64.sh autofix.sh; do
+          for f in install-x86_64.sh autofix.sh pattern-status.txt SLSsteam.so.sha256; do
             curl -fsSL --retry 5 --retry-delay 5 -o "/tmp/$f" \
               "https://github.com/$GH_REPO/releases/latest/download/$f"
             cmp "/tmp/$f" "release/$f"
           done
+          curl -fsSL --retry 5 --retry-delay 5 -o /tmp/SLSsteam.so \
+            "https://github.com/$GH_REPO/releases/latest/download/SLSsteam.so"
+          cmp /tmp/SLSsteam.so release/SLSsteam.so

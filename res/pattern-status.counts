@@ -1,0 +1,18 @@
+# Committed census of the x86_64 locator table, measured by the offline audit
+# (pattern audit against the live steamrt64 pair). scripts/moon64-assets.sh
+# turns these counts plus the built library's sha256 into the pattern-status.txt
+# that moon64/install.sh gates a prebuilt on.
+#
+# Measured 2026-11-15 against:
+#   steamclient.so build 92e5aed05c3e828996e0c7c97a9b2aad41802df9
+#   steamui.so      build a29b8466e72f386c535cf96e697b8cc40956e968
+# 53 steamclient + 5 steamui locators, 21 VFT slots checked, 0 failures.
+#
+# Update these numbers whenever an x86_64 locator lands and re-run the audit.
+arch=x86_64
+required=58
+resolved=58
+pending=0
+runipcframe_tail=ready
+steamclient_build_id=92e5aed05c3e828996e0c7c97a9b2aad41802df9
+steamui_build_id=a29b8466e72f386c535cf96e697b8cc40956e968
