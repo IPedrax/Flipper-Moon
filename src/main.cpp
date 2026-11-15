@@ -164,7 +164,9 @@ static std::atomic<bool> g_auditDiagnosticsEnabled{false};
 static std::atomic<bool> g_auditPolicyReady{false};
 static std::atomic<bool> g_auditBindAll{true};
 
-static void setup()
+enum class SetupTrigger { Preinit, ClientModule };
+
+static void setup(SetupTrigger trigger)
 {
 	lm_process_t proc {};
 	if (!LM_GetProcess(&proc))
@@ -203,6 +205,26 @@ static void setup()
 		unload();
 		return;
 	}
+
+#if defined(__x86_64__)
+	// Only the inner `steam` carries STEAM_STEAMRT_RECURSION_GUARD: the outer one
+	// is the steamrt64 bootstrapper, which never loads steamclient.so; it
+	// re-launches itself in the runtime with the guard set, then only waits. Its
+	// LD_AUDIT stays in place for that inner client. Should steamclient.so ever
+	// load in an unguarded `steam`, la_objopen runs setup() from there instead.
+	if (std::getenv("STEAM_STEAMRT_RECURSION_GUARD") == nullptr)
+	{
+		if (trigger == SetupTrigger::Preinit)
+		{
+			g_pLog->info("setup: steamrt bootstrapper (pid %d, no STEAM_STEAMRT_RECURSION_GUARD) -> skipped; the client it launches keeps LD_AUDIT\n",
+			             static_cast<int>(getpid()));
+			return;
+		}
+		g_pLog->warn("setup: steamclient.so loaded in a steam process without STEAM_STEAMRT_RECURSION_GUARD -> running setup from la_objopen\n");
+	}
+#else
+	(void)trigger;
+#endif
 	BootProf::Span setupProfile(g_pLog.get(), "setup");
 
 	// Every auditor namespace gets its own copy of these statics. A secondary
@@ -1146,7 +1168,7 @@ extern "C" unsigned int la_objopen(struct link_map* map,
 	{
 		if (!setupSuccess)
 		{
-			setup();
+			setup(SetupTrigger::ClientModule);
 		}
 		load();
 	}
@@ -1164,5 +1186,5 @@ extern "C" unsigned int la_objopen(struct link_map* map,
 
 extern "C" void la_preinit(__attribute__((unused)) uintptr_t* cookie)
 {
-	setup();
+	setup(SetupTrigger::Preinit);
 }

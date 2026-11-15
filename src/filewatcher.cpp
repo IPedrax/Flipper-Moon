@@ -101,9 +101,17 @@ void* watchLoop(void* args)
 		// just need to drain the batch and fire one reload.
 		alignas(inotify_event) char buf[4096];
 		ssize_t size = read(watcher->notifyFd, buf, sizeof(buf));
-		if (size <= 0)
+		if (size < 0 && (errno == EINTR || errno == EAGAIN))
 		{
 			continue;
+		}
+		if (size <= 0)
+		{
+			// A live inotify fd never reads 0 bytes or fails here; this one was
+			// closed (its number possibly reused), and retrying would spin.
+			g_pLog->warn("FileWatcher %d: inotify read failed (errno=%d); stopping watcher\n",
+			             watcher->notifyFd, size < 0 ? errno : 0);
+			return nullptr;
 		}
 		size += static_cast<ssize_t>(
 			FileWatcherBurst::drainAdditionalReadable(watcher->notifyFd));
