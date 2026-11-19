@@ -1,6 +1,6 @@
-# slsteam-moon, x86_64 fork
+# Flipper-Moon
 
-A personal fork of [swwayps/slsteam-moon](https://github.com/swwayps/slsteam-moon) for the
+An x86_64 build of slsteam-moon, kept as a personal fork of [swwayps/slsteam-moon](https://github.com/swwayps/slsteam-moon) for the
 64-bit Steam client (steamrt64) on Linux. It is kept as a fork only: nothing here is sent
 upstream, there are no releases, and issues are turned off.
 
