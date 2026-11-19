@@ -31,9 +31,11 @@ install by hand instead of with the installer:
 - Lumen's "Restart Steam" refuses to run unless `~/.local/share/SLSsteam/path/steam` is
   executable. Create it (here it is a symlink to the launcher script).
 - Lumen ships with swwayps repositories hard-coded. The installer repoints them
-  (`repoint_lumen` in `install-x86_64.sh`); a by-hand install does not. By the installer's
-  own comment, Update All and the auto-fix offer would then replace this build with the
-  32-bit one. Do not use them.
+  (`repoint_lumen` in `install-x86_64.sh`); a by-hand install does not, and by the
+  installer's own comment Update All and the auto-fix offer would then replace this build
+  with the 32-bit one. Here they were repointed by hand to this fork's releases and the
+  component is shown as "Flipper-Moon". The fork has no release yet, so both buttons fail
+  with a 404 and change nothing.
 - slsteam-moon warns "Missing key(s)" on every config load when `config.yaml` predates its
   schema, as an AceSLS-era file does.
 
