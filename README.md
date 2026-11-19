@@ -1,4 +1,43 @@
-# slsteam-moon-x64
+# slsteam-moon, x86_64 fork
+
+A personal fork of [swwayps/slsteam-moon](https://github.com/swwayps/slsteam-moon) for the
+64-bit Steam client (steamrt64) on Linux. It is kept as a fork only: nothing here is sent
+upstream, there are no releases, and issues are turned off.
+
+**The port is not this fork's work.** It was written by [ogb4n](https://github.com/ogb4n)
+([ogb4n/slsteam-moon-x64](https://github.com/ogb4n/slsteam-moon-x64)) and
+[KadirBerkpolat1](https://github.com/KadirBerkpolat1). The `x86_64` branch is their 29 commits
+on top of slsteam-moon `0b08fe4`, and the code is unchanged. Lineage: AceSLS/SLSsteam,
+swwayps/slsteam-moon, ogb4n/slsteam-moon-x64, this fork.
+
+Everything after the next section is ogb4n's README. In it, "this repository" means
+ogb4n/slsteam-moon-x64, which is where the installer, the releases and the issue tracker live.
+
+## Verified in this fork
+
+Steam client build `1794536281` (steamrt64), CachyOS (Arch), 2026-11-19.
+
+- Built from this branch with `scripts/build.sh --portable`. `make test-patterns-x86_64`
+  passes on that client: 53 steamclient and 5 steamui locators. Three optional locators are
+  not found on it (`BuildCompleteAppOverviewChange`, `CSteamEngine::Init`,
+  `CSteamEngine::m_ClientUtils`); the log says the dependent feature is disabled. Re-run the
+  audit after every Steam client update.
+- An app that is not in the library installed through Steam's own downloader and launched.
+- Lumen and the LuaTools plugin installed by hand, and their buttons show in Steam.
+
+Not tested: the installer below, the 32-bit path, SteamOS. Three things to know if you
+install by hand instead of with the installer:
+
+- Lumen's "Restart Steam" refuses to run unless `~/.local/share/SLSsteam/path/steam` is
+  executable. Create it (here it is a symlink to the launcher script).
+- Lumen ships with swwayps repositories hard-coded. The installer repoints them
+  (`repoint_lumen` in `install-x86_64.sh`); a by-hand install does not. By the installer's
+  own comment, Update All and the auto-fix offer would then replace this build with the
+  32-bit one. Do not use them.
+- slsteam-moon warns "Missing key(s)" on every config load when `config.yaml` predates its
+  schema, as an AceSLS-era file does.
+
+## About the port
 
 64-bit-only continuation of [swwayps/slsteam-moon](https://github.com/swwayps/slsteam-moon),
 itself a fork of [SLSsteam](https://github.com/AceSLS/SLSsteam). It targets the 64-bit
@@ -56,6 +95,8 @@ the latest x86_64 release of this repository, then runs the upstream
 luatools-moon installer with the 64-bit pieces swapped in (Lumen and the LuaTools plugin
 come from their upstream repositories). CloudRedirect is skipped because its hook is a
 32-bit library: Steam Cloud is disabled for added games (`DisableCloud: yes`).
+
+This installs ogb4n's prebuilt release, not a build of this fork.
 
 **3. Start Steam** from your applications menu. The first launch can take a while.
 
@@ -117,6 +158,13 @@ Steam before relying on a change that touches hooks or locators.
 
 ## Credits
 
+The x86_64 port:
+
+- [ogb4n](https://github.com/ogb4n), who wrote most of it, and
+  [KadirBerkpolat1](https://github.com/KadirBerkpolat1), who added the stability fixes,
+  the prebuilt assets and the issue that started it
+  ([swwayps/slsteam-moon#9](https://github.com/swwayps/slsteam-moon/issues/9)).
+
 Upstream:
 
 - [swwayps](https://github.com/swwayps) and contributors, slsteam-moon: the
@@ -140,4 +188,6 @@ Reference material:
 
 ## Support
 
-Open an issue: https://github.com/ogb4n/slsteam-moon-x64/issues
+Issues are off on this fork. For the 64-bit port, use
+https://github.com/ogb4n/slsteam-moon-x64/issues. For the 32-bit client, use
+https://github.com/swwayps/slsteam-moon/issues.
